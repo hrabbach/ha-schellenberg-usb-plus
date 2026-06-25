@@ -215,6 +215,7 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
 
     _attr_has_entity_name = True
     _attr_should_poll = False
+    _unrecorded_attributes = frozenset({"mode"})
 
     _attr_supported_features = (
         CoverEntityFeature.OPEN
@@ -539,6 +540,10 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
                         if self._target_position not in (0, 100):
                             await self._api.control_blind(self._device_enum, CMD_STOP)
 
+                        self._attr_is_opening = False
+                        self._attr_is_closing = False
+                        self._attr_is_closed = self._attr_current_cover_position == 0
+                        self._target_position = None
                         self._position_update_task = None
                         self._move_start_time = None
                         self._move_start_position = None
