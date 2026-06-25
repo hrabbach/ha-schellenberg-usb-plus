@@ -721,3 +721,54 @@ async def test_cover_initial_position_from_subentry(
 
     assert cover._attr_current_cover_position == 100
     assert cover._attr_is_closed is False
+
+
+@pytest.mark.asyncio
+async def test_cover_initial_position_clamped(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """CONF_INITIAL_POSITION=150 clamps to 100; a restored prior state wins over seeded initial."""
+    # Upper-bound clamp: 150 -> 100
+    cover_clamped = SchellenbergCover(
+        api=mock_api,
+        device_id="2B",
+        device_enum="2B",
+        device_name="Clamped Cover",
+        device_data={CONF_BIDIRECTIONAL: False, CONF_INITIAL_POSITION: 150},
+    )
+    cover_clamped.hass = hass
+
+    with patch.object(cover_clamped, "async_get_last_state", return_value=None):
+        with patch(
+            "custom_components.schellenberg_usb.cover.async_dispatcher_connect"
+        ):
+            with patch.object(cover_clamped, "async_write_ha_state"):
+                await cover_clamped.async_added_to_hass()
+
+    assert cover_clamped._attr_current_cover_position == 100, (
+        f"Expected 100 (clamped from 150), got {cover_clamped._attr_current_cover_position}"
+    )
+
+    # RestoreEntity precedence: prior state of 50 beats seeded initial of 100 (Pitfall 5)
+    cover_restored = SchellenbergCover(
+        api=mock_api,
+        device_id="3C",
+        device_enum="3C",
+        device_name="Restored Cover",
+        device_data={CONF_BIDIRECTIONAL: False, CONF_INITIAL_POSITION: 100},
+    )
+    cover_restored.hass = hass
+
+    last_state = State("cover.restored_cover", "open", {"current_position": 50})
+
+    with patch.object(cover_restored, "async_get_last_state", return_value=last_state):
+        with patch(
+            "custom_components.schellenberg_usb.cover.async_dispatcher_connect"
+        ):
+            with patch.object(cover_restored, "async_write_ha_state"):
+                await cover_restored.async_added_to_hass()
+
+    assert cover_restored._attr_current_cover_position == 50, (
+        f"Expected 50 (restored state wins), got {cover_restored._attr_current_cover_position}"
+    )

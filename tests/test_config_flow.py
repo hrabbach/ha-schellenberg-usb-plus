@@ -317,3 +317,51 @@ async def test_reconfigure_timed_motor_aborts(
     assert result_bi.get("reason") != "timed_calibration_unavailable", (
         "Bidirectional motor should not abort with timed_calibration_unavailable"
     )
+
+
+@pytest.mark.asyncio
+async def test_manual_add_enum_case_normalized(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """Lowercase '1a' collides with existing '1A' after .upper() normalization (Pitfall 4)."""
+    existing_sub = MagicMock()
+    existing_sub.subentry_type = SUBENTRY_TYPE_BLIND
+    existing_sub.data = {"device_enum": "1A", "device_id": "1A"}
+    mock_hub_entry.subentries = MappingProxyType({"existing": existing_sub})  # type: ignore[attr-defined]
+
+    handler = _make_handler(hass, mock_hub_entry.entry_id)
+
+    result = await handler.async_step_manual_add(
+        {
+            "device_enum": "1a",  # lowercase — must be normalized before dedup check
+            CONF_BIDIRECTIONAL: False,
+            "device_name": "",
+        }
+    )
+    assert result["type"] == "form"
+    assert result["errors"].get("device_enum") == "duplicate_enum", (
+        "Expected duplicate_enum: '1a'.upper() == '1A' which already exists"
+    )
+
+
+@pytest.mark.asyncio
+async def test_manual_add_enum_stored_uppercase(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """Submitting '2b' stores device_enum/device_id as '2B' (uppercase) in the entry."""
+    handler = _make_handler(hass, mock_hub_entry.entry_id)
+
+    result = await handler.async_step_manual_add(
+        {
+            "device_enum": "2b",
+            CONF_BIDIRECTIONAL: True,
+            "device_name": "Uppercase Test",
+        }
+    )
+    assert result["type"] == "create_entry"
+    assert result["data"]["device_enum"] == "2B", (
+        f"Expected device_enum '2B', got {result['data']['device_enum']!r}"
+    )
+    assert result["data"]["device_id"] == "2B", (
+        f"Expected device_id '2B', got {result['data']['device_id']!r}"
+    )
