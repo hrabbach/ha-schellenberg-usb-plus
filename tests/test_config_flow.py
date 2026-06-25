@@ -365,3 +365,55 @@ async def test_manual_add_enum_stored_uppercase(
     assert result["data"]["device_id"] == "2B", (
         f"Expected device_id '2B', got {result['data']['device_id']!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_manual_position_aborts_without_pending_state(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """async_step_manual_position aborts when _pending_device_enum is missing (WR-01).
+
+    This guard prevents a broken subentry from being created if the step is
+    reached without async_step_manual_add having run first (HA re-entrancy,
+    serialized-flow resume, or future menu wiring change).
+    """
+    handler = _make_handler(hass, mock_hub_entry.entry_id)
+    # _pending_device_enum is None by default -- do not call manual_add first
+
+    result = await handler.async_step_manual_position(None)
+
+    assert result["type"] == "abort", (
+        f"Expected abort when pending state is missing, got {result['type']!r}"
+    )
+    assert result["reason"] == "pairing_failed", (
+        f"Expected reason='pairing_failed', got {result.get('reason')!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_manual_add_default_mode_is_bidirectional(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """Unmodified manual_add form (no CONF_BIDIRECTIONAL key) defaults to bidirectional (WR-03).
+
+    When a user submits without flipping the toggle, the resolver default must
+    produce CONF_BIDIRECTIONAL=True (bidirectional), matching the field-common case.
+    """
+    handler = _make_handler(hass, mock_hub_entry.entry_id)
+
+    # Omit CONF_BIDIRECTIONAL entirely to simulate an unmodified form submission
+    result = await handler.async_step_manual_add(
+        {
+            "device_enum": "1A",
+            # CONF_BIDIRECTIONAL deliberately omitted
+            "device_name": "Default Mode Blind",
+        }
+    )
+
+    # With bidirectional as default, we expect a direct create_entry (no position step)
+    assert result["type"] == "create_entry", (
+        f"Expected create_entry for bidirectional default, got {result['type']!r}"
+    )
+    assert result["data"][CONF_BIDIRECTIONAL] is True, (
+        f"Expected CONF_BIDIRECTIONAL=True (default), got {result['data'][CONF_BIDIRECTIONAL]!r}"
+    )

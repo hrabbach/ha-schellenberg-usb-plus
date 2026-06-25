@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import MappingProxyType
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -772,3 +773,77 @@ async def test_cover_initial_position_clamped(
     assert cover_restored._attr_current_cover_position == 50, (
         f"Expected 50 (restored state wins), got {cover_restored._attr_current_cover_position}"
     )
+
+
+@pytest.mark.asyncio
+async def test_timed_motor_position_loop_clears_flags(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """Timed motor: after SET_POSITION target is reached via the real loop, flags are cleared.
+
+    Regression test for CR-01: the position-reached branch used to leave
+    _attr_is_opening/_attr_is_closing True and _target_position set, causing HA
+    to render the cover as perpetually moving. This test exercises the real
+    _async_position_update_loop (no patch on _start_position_tracking) and must
+    FAIL against pre-fix code and PASS after the fix.
+    """
+    import time as _time
+
+    # Use a very small travel time (0.5 s) so the move completes within ms
+    # in the event loop.  Start at 0% and move UP to 50% -- the loop should
+    # stop the motor and clear the flags once position >= 50.
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="TM01",
+        device_enum="10",
+        device_name="Timed Motor Test",
+        device_data={
+            CONF_BIDIRECTIONAL: False,
+            CONF_OPEN_TIME: 0.5,
+            CONF_CLOSE_TIME: 0.5,
+        },
+    )
+    cover.hass = hass
+    cover._attr_current_cover_position = 0
+    cover._attr_is_closed = True
+
+    # Kick off async_set_cover_position.  It internally calls async_open_cover,
+    # which calls _start_position_tracking -> creates the real loop task.
+    # We do NOT patch _start_position_tracking here (that is the whole point).
+    with patch.object(cover, "async_write_ha_state"):
+        # Set the move start state manually so _update_position works correctly
+        # when async_open_cover is called without the hass event loop already
+        # running the task scheduler.  We pre-set the start time so that a
+        # position > 50 is instantly computed on the first loop iteration.
+        cover._attr_is_opening = True
+        cover._attr_is_closing = False
+        cover._move_start_position = 0
+        # Backdate the start time by 0.4 s -- with 0.5 s travel = 80% progress,
+        # which already exceeds the target of 50, so the loop exits on the first
+        # iteration after the initial 0.2 s sleep.
+        cover._move_start_time = _time.monotonic() - 0.4
+        cover._target_position = 50
+
+        loop_task = hass.async_create_task(cover._async_position_update_loop())
+
+        # Allow the event loop to run: the task sleeps 0.2 s then checks.
+        # Give it 1 second of wall-clock asyncio time to settle.
+        await asyncio.sleep(0.5)
+
+    # The loop should have exited and cleared the flags.
+    assert cover._attr_is_opening is False, (
+        f"Expected is_opening=False after position reached, got {cover._attr_is_opening}"
+    )
+    assert cover._attr_is_closing is False, (
+        f"Expected is_closing=False after position reached, got {cover._attr_is_closing}"
+    )
+    assert cover._target_position is None, (
+        f"Expected _target_position=None after position reached, got {cover._target_position}"
+    )
+    # Position should equal the requested target (50%)
+    assert cover._attr_current_cover_position == 50, (
+        f"Expected position=50 after reaching target, got {cover._attr_current_cover_position}"
+    )
+    # Task should be done
+    assert loop_task.done(), "Expected position loop task to be done after target reached"
