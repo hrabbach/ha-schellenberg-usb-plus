@@ -38,10 +38,33 @@
     "blind": {
       "entry_type": "Blind",
       "initiate_flow": {
-        "user": "Pair device",
+        "user": "Add device",
         "reconfigure": "Calibrate"
       },
       "step": {
+        "menu": {
+          "title": "Add a blind",
+          "menu_options": {
+            "user": "Pair automatically",
+            "manual_add": "Add manually (already paired)"
+          }
+        },
+        "manual_add": {
+          "title": "Add blind by transmit address",
+          "description": "Enter the 2-character hex transmit address (enum slot) the motor already listens to. Example: 10, 1A, 2B.",
+          "data": {
+            "device_enum": "Transmit address (hex)",
+            "bidirectional": "Bidirectional motor",
+            "device_name": "Friendly name (optional)"
+          }
+        },
+        "manual_position": {
+          "title": "Set initial position",
+          "description": "Where is {device_name} right now? This sets the starting position for the position slider.",
+          "data": {
+            "initial_position": "Current position"
+          }
+        },
         "user": {
           "title": "Pair a new device",
           "description": "Press the pair button to activate pairing mode on your Schellenberg USB stick. Then press the pairing button on your blind motor within 2 minutes.",
@@ -80,12 +103,15 @@
         "pairing_failed": "Pairing failed.",
         "calibration_timeout": "Calibration timed out. The blind took more than 5 minutes to complete the movement. Please check the device and try again.",
         "calibration_start_timeout": "Timeout waiting for the blind to start moving. Please ensure the device is properly connected and try again.",
-        "unknown": "An unexpected error occurred during calibration. Please try again."
+        "unknown": "An unexpected error occurred during calibration. Please try again.",
+        "invalid_enum_format": "Transmit address must be exactly 2 hexadecimal characters (e.g. 10, 1A, 2B).",
+        "duplicate_enum": "A blind with this transmit address is already added to the integration."
       },
       "abort": {
         "pairing_timeout": "No device responded within 2 minutes. Please try again.",
         "pairing_failed": "Pairing failed.",
-        "reconfigure_successful": "Calibration completed successfully"
+        "reconfigure_successful": "Calibration completed successfully",
+        "timed_calibration_unavailable": "Calibration for timed motors is not yet available. It will be added in a future update."
       }
     }
   },

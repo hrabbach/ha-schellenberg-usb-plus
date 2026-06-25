@@ -24,7 +24,9 @@ from .const import (
     CMD_DOWN,
     CMD_STOP,
     CMD_UP,
+    CONF_BIDIRECTIONAL,
     CONF_CLOSE_TIME,
+    CONF_INITIAL_POSITION,
     CONF_OPEN_TIME,
     CONF_SERIAL_PORT,
     DOMAIN,
@@ -260,6 +262,25 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
             CONF_CLOSE_TIME, DEFAULT_TRAVEL_TIME
         )
 
+        # Mode flag: True = bidirectional (can receive events), False = timed.
+        # Read-default is True so legacy Phase-1 auto-paired subentries that have
+        # NO CONF_BIDIRECTIONAL key are treated as bidirectional — preventing a
+        # CTRL-05 regression (Phase 3 would route them through timed control).
+        # Manual adds ALWAYS write the key explicitly, so this default only
+        # affects pre-existing flag-less subentries. (Phase 2 known limitation:
+        # bidirectional manual adds store device_id as 2-char enum, so inbound
+        # 6-char ss-frame device_id matches will miss _registered_devices — see
+        # RESEARCH.md "Signal Filter Coupling". No fix needed for timed motors
+        # as they produce no inbound frames. Tracked for a v2 story.)
+        self._is_bidirectional: bool = bool(
+            device_data_dict.get(CONF_BIDIRECTIONAL, True)
+        )
+        self._initial_position: int | None = (
+            int(device_data_dict[CONF_INITIAL_POSITION])
+            if CONF_INITIAL_POSITION in device_data_dict
+            else None
+        )
+
         self._move_start_time: float | None = None
         self._move_start_position: int | None = None
         self._position_update_task: asyncio.Task[None] | None = None
@@ -285,6 +306,13 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
     def entity_registry_enabled_default(self) -> bool:
         """Return if entity should be enabled by default."""
         return True
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return device-specific state attributes."""
+        return {
+            "mode": "bidirectional" if self._is_bidirectional else "timed",
+        }
 
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass."""
@@ -329,13 +357,24 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
                 )
 
         if self._attr_current_cover_position is None:
-            self._attr_current_cover_position = 0
-            self._attr_is_closed = True
-            _LOGGER.debug(
-                "No previous state for %s (%s); defaulting position to 0%% (closed)",
-                self._attr_name,
-                self._device_id,
-            )
+            if self._initial_position is not None:
+                self._attr_current_cover_position = max(
+                    0, min(100, self._initial_position)
+                )
+                self._attr_is_closed = self._attr_current_cover_position == 0
+                _LOGGER.debug(
+                    "Seeding initial position for %s to %d%% from subentry.data",
+                    self._attr_name,
+                    self._attr_current_cover_position,
+                )
+            else:
+                self._attr_current_cover_position = 0
+                self._attr_is_closed = True
+                _LOGGER.debug(
+                    "No previous state for %s (%s); defaulting position to 0%% (closed)",
+                    self._attr_name,
+                    self._device_id,
+                )
 
         self.async_write_ha_state()
 

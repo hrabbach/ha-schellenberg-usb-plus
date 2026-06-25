@@ -105,3 +105,7 @@ CALIBRATION_TIMEOUT = 300  # Maximum 5 minutes (300 seconds) for calibration
 CONF_OPEN_TIME = "open_time"  # Time it takes to open (up) in seconds
 CONF_CLOSE_TIME = "close_time"  # Time it takes to close (down) in seconds
 CONF_DEVICE_ID = "device_id"  # Device ID for calibration
+
+# Manual-add device mode flag (stored in subentry.data)
+CONF_BIDIRECTIONAL = "bidirectional"  # bool; False = timed/non-bidirectional
+CONF_INITIAL_POSITION = "initial_position"  # int 0-100; timed motors only

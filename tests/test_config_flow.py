@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from types import MappingProxyType
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,7 +11,6 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.schellenberg_usb.const import (
     CONF_BIDIRECTIONAL,
-    CONF_INITIAL_POSITION,
     CONF_SERIAL_PORT,
     DOMAIN,
     SUBENTRY_TYPE_BLIND,
@@ -20,6 +18,21 @@ from custom_components.schellenberg_usb.const import (
 from custom_components.schellenberg_usb.config_flow import (
     SchellenbergPairingSubentryFlow,
 )
+
+
+def _make_handler(
+    hass: HomeAssistant, entry_id: str
+) -> SchellenbergPairingSubentryFlow:
+    """Create a flow handler bound to the given hub entry.
+
+    ConfigSubentryFlow._get_entry() reads self.handler[0] (the entry_id portion of
+    a (entry_id, subentry_type) tuple). async_create_entry requires source == 'user'.
+    """
+    handler = SchellenbergPairingSubentryFlow()
+    handler.hass = hass
+    handler.handler = (entry_id, SUBENTRY_TYPE_BLIND)
+    handler.context = {"source": "user"}
+    return handler
 
 
 @pytest.fixture
@@ -48,9 +61,7 @@ async def test_manual_add_menu_shown(
     hass: HomeAssistant, mock_hub_entry: ConfigEntry
 ) -> None:
     """Menu step returns show_menu with 'user' and 'manual_add' options."""
-    handler = SchellenbergPairingSubentryFlow()
-    handler.hass = hass
-    handler.handler = mock_hub_entry.entry_id
+    handler = _make_handler(hass, mock_hub_entry.entry_id)
 
     result = await handler.async_step_blind(None)
 
@@ -64,9 +75,7 @@ async def test_manual_add_creates_subentry(
     hass: HomeAssistant, mock_hub_entry: ConfigEntry
 ) -> None:
     """Bidirectional manual-add with a valid enum creates an entry without api.pair_device_and_wait."""
-    handler = SchellenbergPairingSubentryFlow()
-    handler.hass = hass
-    handler.handler = mock_hub_entry.entry_id
+    handler = _make_handler(hass, mock_hub_entry.entry_id)
 
     mock_api = MagicMock()
     mock_api.pair_device_and_wait = AsyncMock()
@@ -89,11 +98,9 @@ async def test_manual_add_mode_flag(
     hass: HomeAssistant, mock_hub_entry: ConfigEntry
 ) -> None:
     """Timed selection stores CONF_BIDIRECTIONAL False; bidirectional stores True."""
-    handler_timed = SchellenbergPairingSubentryFlow()
-    handler_timed.hass = hass
-    handler_timed.handler = mock_hub_entry.entry_id
+    # Timed: goes through position step
+    handler_timed = _make_handler(hass, mock_hub_entry.entry_id)
 
-    # For timed, advance to position step to get data
     result_timed = await handler_timed.async_step_manual_add(
         {
             "device_enum": "2B",
@@ -112,10 +119,8 @@ async def test_manual_add_mode_flag(
     assert result_timed_entry["type"] == "create_entry"
     assert result_timed_entry["data"][CONF_BIDIRECTIONAL] is False
 
-    # For bidirectional
-    handler_bi = SchellenbergPairingSubentryFlow()
-    handler_bi.hass = hass
-    handler_bi.handler = mock_hub_entry.entry_id
+    # Bidirectional: goes straight to create_entry
+    handler_bi = _make_handler(hass, mock_hub_entry.entry_id)
 
     result_bi = await handler_bi.async_step_manual_add(
         {
@@ -134,9 +139,7 @@ async def test_manual_add_invalid_enum(
 ) -> None:
     """Inputs 'XY', '100', '' each return form errors with invalid_enum_format."""
     for bad_input in ("XY", "100", ""):
-        handler = SchellenbergPairingSubentryFlow()
-        handler.hass = hass
-        handler.handler = mock_hub_entry.entry_id
+        handler = _make_handler(hass, mock_hub_entry.entry_id)
 
         result = await handler.async_step_manual_add(
             {
@@ -164,9 +167,7 @@ async def test_manual_add_duplicate_enum(
     existing_sub.data = {"device_enum": "1A", "device_id": "1A"}
     mock_hub_entry.subentries = MappingProxyType({"existing": existing_sub})  # type: ignore[attr-defined]
 
-    handler = SchellenbergPairingSubentryFlow()
-    handler.hass = hass
-    handler.handler = mock_hub_entry.entry_id
+    handler = _make_handler(hass, mock_hub_entry.entry_id)
 
     result = await handler.async_step_manual_add(
         {
@@ -185,9 +186,7 @@ async def test_manual_add_device_name(
 ) -> None:
     """Provided name becomes the create_entry title; omitted name falls back to 'Blind {ENUM}'."""
     # With name
-    handler = SchellenbergPairingSubentryFlow()
-    handler.hass = hass
-    handler.handler = mock_hub_entry.entry_id
+    handler = _make_handler(hass, mock_hub_entry.entry_id)
 
     result = await handler.async_step_manual_add(
         {
@@ -200,9 +199,7 @@ async def test_manual_add_device_name(
     assert result["title"] == "My Living Room Blind"
 
     # Without name — falls back to "Blind {ENUM}"
-    handler2 = SchellenbergPairingSubentryFlow()
-    handler2.hass = hass
-    handler2.handler = mock_hub_entry.entry_id
+    handler2 = _make_handler(hass, mock_hub_entry.entry_id)
 
     result2 = await handler2.async_step_manual_add(
         {
@@ -221,9 +218,7 @@ async def test_manual_add_position_step_timed_only(
 ) -> None:
     """Timed mode advances to manual_position form; bidirectional goes straight to create_entry."""
     # Timed: should show position form
-    handler_timed = SchellenbergPairingSubentryFlow()
-    handler_timed.hass = hass
-    handler_timed.handler = mock_hub_entry.entry_id
+    handler_timed = _make_handler(hass, mock_hub_entry.entry_id)
 
     result_timed = await handler_timed.async_step_manual_add(
         {
@@ -236,9 +231,7 @@ async def test_manual_add_position_step_timed_only(
     assert result_timed["step_id"] == "manual_position"
 
     # Bidirectional: should go directly to create_entry
-    handler_bi = SchellenbergPairingSubentryFlow()
-    handler_bi.hass = hass
-    handler_bi.handler = mock_hub_entry.entry_id
+    handler_bi = _make_handler(hass, mock_hub_entry.entry_id)
 
     result_bi = await handler_bi.async_step_manual_add(
         {
@@ -271,9 +264,7 @@ async def test_reconfigure_timed_motor_aborts(
     }
     timed_subentry.title = "Timed Blind"
 
-    handler_timed = SchellenbergPairingSubentryFlow()
-    handler_timed.hass = hass
-    handler_timed.handler = mock_hub_entry.entry_id
+    handler_timed = _make_handler(hass, mock_hub_entry.entry_id)
 
     with patch.object(
         handler_timed, "_get_reconfigure_subentry", return_value=timed_subentry
@@ -309,9 +300,7 @@ async def test_reconfigure_timed_motor_aborts(
     mock_api.control_blind = AsyncMock()
     mock_hub_entry.runtime_data = mock_api  # type: ignore[attr-defined]
 
-    handler_bi = SchellenbergPairingSubentryFlow()
-    handler_bi.hass = hass
-    handler_bi.handler = mock_hub_entry.entry_id
+    handler_bi = _make_handler(hass, mock_hub_entry.entry_id)
 
     with patch.object(
         handler_bi, "_get_reconfigure_subentry", return_value=bi_subentry
