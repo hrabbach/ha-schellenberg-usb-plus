@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -246,3 +247,65 @@ async def test_api_stop_pairing_mode_oserror(hass: HomeAssistant) -> None:
 
     # Should not raise error
     await api._stop_pairing_mode(delay=False)
+
+
+# --- ignore_unknown toggle tests (RED: these fail until Task 2 adds the feature) ---
+
+
+@pytest.mark.asyncio
+async def test_handle_message_unknown_device_warning_default(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Default (ignore_unknown=False): unknown ss-frame is logged at WARNING."""
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    # Default is False — do not set anything
+
+    with caplog.at_level(
+        logging.DEBUG, logger="custom_components.schellenberg_usb.api"
+    ):
+        api._handle_message("ss99UNKNOWNZZZZ01PP00")
+
+    # Must have at least one WARNING for the unknown device
+    assert any(
+        r.levelno == logging.WARNING for r in caplog.records
+    ), "Expected WARNING log for unknown device when ignore_unknown is False"
+
+
+@pytest.mark.asyncio
+async def test_handle_message_unknown_device_debug_when_ignored(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Toggle ON: unknown ss-frame logged at DEBUG, no WARNING emitted."""
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    api.ignore_unknown = True  # toggle on
+
+    with caplog.at_level(
+        logging.DEBUG, logger="custom_components.schellenberg_usb.api"
+    ):
+        api._handle_message("ss99UNKNOWNZZZZ01PP00")
+
+    assert any(
+        r.levelno == logging.DEBUG
+        for r in caplog.records
+        if "UNKNOWN" in r.message or "unknown" in r.message.lower()
+    ), "Expected DEBUG log for ignored unknown device"
+    assert not any(
+        r.levelno == logging.WARNING for r in caplog.records
+    ), "Expected no WARNING when ignore_unknown is True"
+
+
+@pytest.mark.asyncio
+async def test_handle_message_pairing_not_blocked_by_ignore(
+    hass: HomeAssistant,
+) -> None:
+    """Pairing future is resolved even when ignore_unknown is True."""
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    api.ignore_unknown = True
+    api._pairing_future = hass.loop.create_future()
+
+    api._handle_message("ss99UNKNOWNZZZZ01PP00")
+
+    # Pairing future must be resolved — the ignore filter must not block it
+    assert api._pairing_future.done(), (
+        "Expected _pairing_future to be resolved; filter must not block pairing"
+    )
