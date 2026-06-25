@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Awaitable, cast
+import re
+from collections.abc import Awaitable
+from typing import Any, cast
 
 import serial  # NOTE: blocking open used only to sanity-check connectivity
 import voluptuous as vol
@@ -18,7 +20,10 @@ from homeassistant.helpers import selector
 from homeassistant.helpers.service_info.usb import UsbServiceInfo
 
 from .const import (
+    CONF_BIDIRECTIONAL,
     CONF_CLOSE_TIME,
+    CONF_DEVICE_ID,
+    CONF_INITIAL_POSITION,
     CONF_OPEN_TIME,
     CONF_SERIAL_PORT,
     DOMAIN,
@@ -201,6 +206,7 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         self._pending_device_id: str | None = None
         self._pending_device_enum: str | None = None
         self._pending_device_name: str | None = None
+        self._pending_is_bidirectional: bool = False
 
     def _get_calibration_handler(self) -> CalibrationFlowHandler:
         """Return (and lazily create) the calibration flow handler."""
@@ -218,16 +224,146 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
     async def async_step_blind(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Entry point when the user clicks the 'Pair device' button.
+        """Entry point when the user clicks the 'Add device' button.
 
         Home Assistant calls async_step_{subentry_type}() where subentry_type is
         the key returned by async_get_supported_subentry_types. Since our type is
-        'blind', we implement async_step_blind(). Previously this was named
-        async_step_pairing, which caused the flow to fall back and the
-        translation key for the initiate button to be missing.
+        'blind', we implement async_step_blind(). Delegates to async_step_menu
+        so the user can choose between auto-pair and manual-add.
         """
-        _LOGGER.debug("Subentry blind flow initiated (pairing new device)")
-        return await self.async_step_user(user_input)
+        _LOGGER.debug("Subentry blind flow initiated")
+        return await self.async_step_menu(user_input)
+
+    async def async_step_menu(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Show menu: Pair automatically or Add manually."""
+        return self.async_show_menu(
+            step_id="menu",
+            menu_options=["user", "manual_add"],
+        )
+
+    async def async_step_manual_add(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Collect device enum, mode, and optional name for manual-add."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            # Normalize to uppercase before validation and storage (Pitfall 4)
+            device_enum = user_input.get("device_enum", "").upper()
+
+            # Format check: exactly 2 hex characters
+            if not re.match(r"^[0-9A-Fa-f]{2}$", device_enum):
+                errors["device_enum"] = "invalid_enum_format"
+            else:
+                # Duplicate check across existing blind subentries
+                hub_entry = self._get_entry()
+                existing_enums = {
+                    s.data.get("device_enum")
+                    for s in hub_entry.subentries.values()
+                    if s.subentry_type == SUBENTRY_TYPE_BLIND
+                }
+                if device_enum in existing_enums:
+                    errors["device_enum"] = "duplicate_enum"
+
+            if not errors:
+                # Resolve mode — BooleanSelector returns a real Python bool
+                is_bidirectional: bool = bool(
+                    user_input.get(CONF_BIDIRECTIONAL, True)
+                )
+                device_name = (
+                    user_input.get("device_name") or f"Blind {device_enum}"
+                )
+                self._pending_device_enum = device_enum
+                self._pending_device_name = device_name
+                self._pending_is_bidirectional = is_bidirectional
+
+                if is_bidirectional:
+                    _LOGGER.info(
+                        "Creating bidirectional manual subentry for enum %s",
+                        device_enum,
+                    )
+                    return self.async_create_entry(
+                        title=device_name,
+                        data={
+                            CONF_DEVICE_ID: device_enum,
+                            "device_enum": device_enum,
+                            CONF_BIDIRECTIONAL: True,
+                        },
+                        unique_id=device_enum,
+                    )
+                # Timed: advance to initial-position step
+                _LOGGER.debug(
+                    "Timed motor %s: advancing to position step", device_enum
+                )
+                return await self.async_step_manual_position()
+
+        return self.async_show_form(
+            step_id="manual_add",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("device_enum"): selector.TextSelector(),
+                    vol.Required(
+                        CONF_BIDIRECTIONAL, default=True
+                    ): selector.BooleanSelector(),
+                    vol.Optional("device_name"): selector.TextSelector(),
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_manual_position(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Collect initial position for timed motors (shown only after mode=timed)."""
+        if not self._pending_device_enum:
+            return self.async_abort(reason="pairing_failed")
+
+        if user_input is not None:
+            initial_position = int(user_input.get("initial_position", 100))
+            # Clamp to 0-100 as defense in depth (slider already bounds, but be safe)
+            initial_position = max(0, min(100, initial_position))
+            device_enum = self._pending_device_enum or ""
+            device_name = self._pending_device_name or f"Blind {device_enum}"
+            _LOGGER.info(
+                "Creating timed manual subentry for enum %s at initial position %d%%",
+                device_enum,
+                initial_position,
+            )
+            return self.async_create_entry(
+                title=device_name,
+                data={
+                    CONF_DEVICE_ID: device_enum,
+                    "device_enum": device_enum,
+                    CONF_BIDIRECTIONAL: False,
+                    CONF_INITIAL_POSITION: initial_position,
+                },
+                unique_id=device_enum,
+            )
+
+        return self.async_show_form(
+            step_id="manual_position",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        "initial_position", default=100
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0,
+                            max=100,
+                            step=1,
+                            unit_of_measurement="%",
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                }
+            ),
+            description_placeholders={
+                "device_name": self._pending_device_name or "",
+            },
+            last_step=True,
+        )
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -328,6 +464,19 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         device_enum = subentry.data.get("device_enum")
         if not device_id:
             return self.async_abort(reason="device_not_found")
+
+        # Guard: timed motors cannot calibrate via the event-waiting CalibrationFlowHandler
+        # (they never send EVENT_STARTED_MOVING_*/EVENT_STOPPED, so calibration hangs).
+        # Use the same missing-key default as cover.py (True = bidirectional) so legacy
+        # flag-less subentries are still treated as bidirectional here (REVIEW-2, T-02-04).
+        # Timed-motor calibration is deferred to Phase 4 / CAL-01.
+        is_bidirectional = bool(subentry.data.get(CONF_BIDIRECTIONAL, True))
+        if not is_bidirectional:
+            _LOGGER.debug(
+                "Reconfigure blocked for timed motor %s: calibration not yet supported",
+                device_id,
+            )
+            return self.async_abort(reason="timed_calibration_unavailable")
 
         # Build a minimal device record; calibration handler will enrich after timing
         device_name = subentry.title or f"Blind {device_id}"
