@@ -89,6 +89,61 @@ async def test_async_setup_entry_creates_hub_device(
 
 
 @pytest.mark.asyncio
+async def test_setup_entry_pushes_initial_ignore_unknown(
+    hass: HomeAssistant, mock_config_entry: ConfigEntry
+) -> None:
+    """async_setup_entry sets api.ignore_unknown from entry.options (False when unset)."""
+    from custom_components.schellenberg_usb import async_setup_entry
+
+    with (
+        patch.object(SchellenbergUsbApi, "connect", new_callable=AsyncMock),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", new_callable=AsyncMock
+        ),
+    ):
+        result = await async_setup_entry(hass, mock_config_entry)
+
+    assert result is True
+    assert mock_config_entry.runtime_data.ignore_unknown is False
+
+
+@pytest.mark.asyncio
+async def test_on_entry_updated_toggle_no_reload(
+    hass: HomeAssistant, mock_config_entry: ConfigEntry
+) -> None:
+    """Update listener live-applies ignore_unknown without triggering reload."""
+    from custom_components.schellenberg_usb import _SETUP_CALLBACKS, async_setup_entry
+
+    with (
+        patch.object(SchellenbergUsbApi, "connect", new_callable=AsyncMock),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", new_callable=AsyncMock
+        ),
+    ):
+        await async_setup_entry(hass, mock_config_entry)
+
+    api: SchellenbergUsbApi = mock_config_entry.runtime_data
+    assert api.ignore_unknown is False  # default before toggle
+
+    with patch.object(
+        hass.config_entries, "async_reload", new_callable=AsyncMock
+    ) as mock_reload:
+        # Simulate user saving options with toggle on
+        hass.config_entries.async_update_entry(
+            mock_config_entry, options={"ignore_unknown": True}
+        )
+        await hass.async_block_till_done()
+
+    # (a) live-apply happened
+    assert api.ignore_unknown is True
+    # (b) async_reload was NOT called for the toggle-only save
+    mock_reload.assert_not_called()
+    # (c) subentry tracking is intact — reload branch was NOT entered
+    known = _SETUP_CALLBACKS[mock_config_entry.entry_id]["subentry_ids"]
+    assert known == set(mock_config_entry.subentries.keys())
+
+
+@pytest.mark.asyncio
 async def test_async_unload_entry(
     hass: HomeAssistant, mock_config_entry: ConfigEntry
 ) -> None:

@@ -13,6 +13,7 @@ from homeassistant.helpers import device_registry as dr
 
 from .api import SchellenbergUsbApi
 from .const import (
+    CONF_IGNORE_UNKNOWN,
     CONF_SERIAL_PORT,
     DOMAIN,
     PLATFORMS,
@@ -53,6 +54,11 @@ async def async_setup_entry(
 
     # Store API in runtime_data for platforms and services access
     entry.runtime_data = api
+
+    # Push the initial "Ignore unknown signals" option onto the API so the
+    # flag is correct from the very first message, even before the user ever
+    # opens the options form.
+    api.ignore_unknown = entry.options.get(CONF_IGNORE_UNKNOWN, False)
 
     # Start the connection
     hass.async_create_task(api.connect())
@@ -133,6 +139,22 @@ async def async_setup_entry(
             _SETUP_CALLBACKS[entry.entry_id]["subentry_ids"] = current_subentries
             # Reload the entire entry to re-setup all platforms with new subentries
             await hass_instance.config_entries.async_reload(entry.entry_id)
+            # Mandatory: stop here so the toggle code below never runs on the
+            # stale/replaced runtime_data during a reload (D-01 / Pitfall 1).
+            return
+
+        # Toggle-only change: live-apply "Ignore unknown signals" to the running
+        # API without reloading (no serial blip — SC#1). Guard against
+        # setup/teardown edges where runtime_data may be unset (review finding #3).
+        api_instance = getattr(updated_entry, "runtime_data", None)
+        if not api_instance:
+            return
+        new_ignore = updated_entry.options.get(CONF_IGNORE_UNKNOWN, False)
+        if api_instance.ignore_unknown != new_ignore:
+            _LOGGER.debug(
+                "Live-applying ignore_unknown=%s to running API", new_ignore
+            )
+            api_instance.ignore_unknown = new_ignore
 
     entry.add_update_listener(_on_entry_updated)
 

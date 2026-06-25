@@ -80,6 +80,9 @@ class SchellenbergUsbApi:
         self._pending_retry_command: str | None = None
         self._retry_task: asyncio.Task[None] | None = None
 
+        # Hub options (live-applied from entry.options by __init__.py)
+        self._ignore_unknown: bool = False
+
     async def connect(self) -> None:
         """Establish a connection to the serial port."""
         if self._is_connecting or (
@@ -284,14 +287,25 @@ class SchellenbergUsbApi:
 
                 # If this is the first time we see this device (auto-discovery mode)
                 if device_id not in self._registered_devices:
-                    _LOGGER.warning(
-                        "Received message for device %s (enum=%s, cmd=%s) but no "
-                        "corresponding entity found. The device may need to be added "
-                        "to Home Assistant",
-                        device_id,
-                        device_enum,
-                        command,
-                    )
+                    if self._ignore_unknown:
+                        # "Ignore unknown signals" hub option is on — demote the
+                        # unknown-device line to DEBUG to keep logs quiet (SIG-01).
+                        _LOGGER.debug(
+                            "Ignoring signal from unknown device %s "
+                            "(enum=%s, cmd=%s)",
+                            device_id,
+                            device_enum,
+                            command,
+                        )
+                    else:
+                        _LOGGER.warning(
+                            "Received message for device %s (enum=%s, cmd=%s) but no "
+                            "corresponding entity found. The device may need to be added "
+                            "to Home Assistant",
+                            device_id,
+                            device_enum,
+                            command,
+                        )
                 else:
                     # The entity will handle the event via the dispatcher
                     _LOGGER.debug(
@@ -556,6 +570,16 @@ class SchellenbergUsbApi:
     def hub_id(self) -> str | None:
         """Return the hub device ID."""
         return self._hub_id
+
+    @property
+    def ignore_unknown(self) -> bool:
+        """Return whether unknown-device signals are demoted to DEBUG."""
+        return self._ignore_unknown
+
+    @ignore_unknown.setter
+    def ignore_unknown(self, value: bool) -> None:
+        """Set whether unknown-device signals are demoted to DEBUG."""
+        self._ignore_unknown = value
 
     # LED Control Methods
     async def led_on(self) -> None:

@@ -26,6 +26,7 @@ SUBENTRY_TYPE_BLIND = "blind"
 # Configuration keys
 CONF_SERIAL_PORT = "serial_port"
 CONF_DEVICE_NAME = "device_name"
+CONF_IGNORE_UNKNOWN = "ignore_unknown"
 
 # Data keys
 DATA_API_INSTANCE = "api_instance"

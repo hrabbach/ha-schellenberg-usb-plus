@@ -95,7 +95,11 @@
         "title": "Schellenberg USB",
         "description": "Bearbeiten Sie den seriellen Anschlusspfad für den Schellenberg USB-Hub.",
         "data": {
-          "serial_port": "Serieller Anschluss"
+          "serial_port": "Serieller Anschluss",
+          "ignore_unknown": "Unbekannte Signale ignorieren"
+        },
+        "data_description": {
+          "ignore_unknown": "Wenn aktiviert, werden Signale von Geräten, die nicht zu dieser Integration gehören (z. B. Handfernbedienungen), nicht mehr ins Protokoll geschrieben."
         },
         "submit": "Speichern"
       }
