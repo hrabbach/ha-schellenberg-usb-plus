@@ -4,6 +4,8 @@
 [![License](https://img.shields.io/github/license/hrabbach/schellenberg_usb.svg)](https://github.com/hrabbach/schellenberg_usb/blob/main/LICENSE)
 ![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/hrabbach/schellenberg_usb/build-test.yaml)
 
+> Maintained fork of [GimpArm/schellenberg_usb](https://github.com/GimpArm/schellenberg_usb).
+
 Home Assistant component that interfaces with the [Schellenberg Usb Funk-Stick](https://www.schellenberg.de/smart-home-produkte/smart-home-steuerzentralen/funk-stick/21009/).
 
 > [!WARNING] 
