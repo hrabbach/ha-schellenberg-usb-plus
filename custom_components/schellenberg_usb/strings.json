@@ -4,8 +4,7 @@
       "menu": {
         "title": "Schellenberg USB setup",
         "menu_options": {
-          "user": "Set up USB hub",
-          "pair_device_menu": "Pair new device"
+          "user": "Set up USB hub"
         }
       },
       "user": {
@@ -60,7 +59,7 @@
         },
         "manual_position": {
           "title": "Set initial position",
-          "description": "Where is {device_name} right now? This sets the starting position for the position slider.",
+          "description": "Where is {device_name} right now? This sets the starting position for the position slider. Note: positioning for timed motors uses a default travel time and is uncalibrated until calibration support is added in a later update.",
           "data": {
             "initial_position": "Current position"
           }
