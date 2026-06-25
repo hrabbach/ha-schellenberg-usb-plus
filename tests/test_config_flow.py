@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.schellenberg_usb.const import (
     CONF_BIDIRECTIONAL,
@@ -86,6 +88,39 @@ async def test_pair_step_shows_form(
 
     assert result["type"] == "form"
     assert result["step_id"] == "pair"
+
+
+@pytest.mark.asyncio
+async def test_subentry_flow_entry_step_is_menu(
+    hass: HomeAssistant,
+    enable_custom_integrations: None,
+) -> None:
+    """Driving the real HA subentry-flow seam must land on the menu.
+
+    Regression for the v1.1.0 bug: the menu was wired to async_step_blind on the
+    false assumption that HA initiates a subentry flow at async_step_{subentry_type}.
+    HA actually initiates user-triggered subentry flows at async_step_user, so the
+    menu was never reachable. This test goes through
+    hass.config_entries.subentries.async_init — the ACTUAL seam HA uses — rather
+    than calling a handler method directly, so it would fail if the entry step
+    regressed back to async_step_blind / the old auto-pair form.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Schellenberg USB",
+        data={CONF_SERIAL_PORT: "/dev/ttyUSB0"},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_BLIND),
+        context={"source": "user"},
+    )
+
+    assert result["type"] == FlowResultType.MENU
+    assert result["step_id"] == "menu"
+    assert "pair" in result["menu_options"]
+    assert "manual_add" in result["menu_options"]
 
 
 @pytest.mark.asyncio

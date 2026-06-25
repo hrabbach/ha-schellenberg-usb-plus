@@ -228,11 +228,21 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
 
         Home Assistant initiates user-triggered subentry flows via the `user`
         step (per HA config-subentry docs) — NOT async_step_{subentry_type}.
-        Show the menu so the user can choose between auto-pair and manual-add.
-        Selecting an option routes to async_step_{option}: 'pair' or
-        'manual_add'.
+        Delegate to the menu so the user can choose auto-pair or manual-add.
         """
         _LOGGER.debug("Subentry blind flow initiated")
+        return await self.async_step_menu(user_input)
+
+    async def async_step_menu(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Show menu: Pair automatically or Add manually.
+
+        async_show_menu(step_id="menu") REQUIRES a matching async_step_menu
+        method to exist — HA validates that a shown step_id resolves to a handler
+        (it raises UnknownStep otherwise). Selecting an option routes to
+        async_step_{option}: 'pair' or 'manual_add'.
+        """
         return self.async_show_menu(
             step_id="menu",
             menu_options=["pair", "manual_add"],
