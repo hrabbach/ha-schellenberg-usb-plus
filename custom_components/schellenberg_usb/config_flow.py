@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Awaitable, cast
+from collections.abc import Awaitable
+from typing import Any, cast
 
 import serial  # NOTE: blocking open used only to sanity-check connectivity
 import voluptuous as vol
@@ -206,7 +207,6 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         self._pending_device_enum: str | None = None
         self._pending_device_name: str | None = None
         self._pending_is_bidirectional: bool = False
-        self._pending_initial_position: int | None = None
 
     def _get_calibration_handler(self) -> CalibrationFlowHandler:
         """Return (and lazily create) the calibration flow handler."""
@@ -270,7 +270,7 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
             if not errors:
                 # Resolve mode — BooleanSelector returns a real Python bool
                 is_bidirectional: bool = bool(
-                    user_input.get(CONF_BIDIRECTIONAL, False)
+                    user_input.get(CONF_BIDIRECTIONAL, True)
                 )
                 device_name = (
                     user_input.get("device_name") or f"Blind {device_enum}"
@@ -305,7 +305,7 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
                 {
                     vol.Required("device_enum"): selector.TextSelector(),
                     vol.Required(
-                        CONF_BIDIRECTIONAL, default=False
+                        CONF_BIDIRECTIONAL, default=True
                     ): selector.BooleanSelector(),
                     vol.Optional("device_name"): selector.TextSelector(),
                 }
@@ -317,9 +317,12 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
         """Collect initial position for timed motors (shown only after mode=timed)."""
+        if not self._pending_device_enum:
+            return self.async_abort(reason="pairing_failed")
+
         if user_input is not None:
             initial_position = int(user_input.get("initial_position", 100))
-            # Clamp to 0–100 as defense in depth (slider already bounds, but be safe)
+            # Clamp to 0-100 as defense in depth (slider already bounds, but be safe)
             initial_position = max(0, min(100, initial_position))
             device_enum = self._pending_device_enum or ""
             device_name = self._pending_device_name or f"Blind {device_enum}"
