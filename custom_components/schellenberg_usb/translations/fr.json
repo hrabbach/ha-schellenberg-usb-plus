@@ -95,7 +95,11 @@
         "title": "Schellenberg USB",
         "description": "Modifiez le chemin du port série pour le hub USB Schellenberg.",
         "data": {
-          "serial_port": "Port série"
+          "serial_port": "Port série",
+          "ignore_unknown": "Ignorer les signaux inconnus"
+        },
+        "data_description": {
+          "ignore_unknown": "Lorsqu'elle est activée, les signaux provenant de périphériques non ajoutés à cette intégration (p. ex. télécommandes) sont masqués dans le journal."
         },
         "submit": "Enregistrer"
       }

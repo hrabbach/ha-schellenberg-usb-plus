@@ -95,7 +95,11 @@
         "title": "Schellenberg USB",
         "description": "Edit the serial port path for the Schellenberg USB hub.",
         "data": {
-          "serial_port": "Serial port"
+          "serial_port": "Serial port",
+          "ignore_unknown": "Ignore unknown signals"
+        },
+        "data_description": {
+          "ignore_unknown": "When enabled, signals from devices not added to this integration (e.g. handheld remotes) are silenced in the log."
         },
         "submit": "Save"
       }

@@ -16,7 +16,7 @@ from homeassistant.config_entries import ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
-from .const import CONF_SERIAL_PORT
+from .const import CONF_IGNORE_UNKNOWN, CONF_SERIAL_PORT
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,8 +34,10 @@ class SchellenbergOptionsFlowHandler(OptionsFlow):
         """Edit the USB serial port."""
         self._errors = {}
         current_port = self.config_entry.data.get(CONF_SERIAL_PORT, "/dev/ttyUSB0")
+        current_ignore = self.config_entry.options.get(CONF_IGNORE_UNKNOWN, False)
         if user_input is not None:
             new_port = user_input[CONF_SERIAL_PORT]
+            new_ignore = user_input.get(CONF_IGNORE_UNKNOWN, False)
             if new_port != current_port:
                 try:
                     serial_conn = serial.Serial(new_port)
@@ -49,19 +51,30 @@ class SchellenbergOptionsFlowHandler(OptionsFlow):
                     _LOGGER.exception("Unexpected error validating port %s", new_port)
                     self._errors["base"] = "unknown"
                 else:
-                    # Update entry data and reload if changed
+                    # Update entry data and reload because the port changed.
                     updated = {**self.config_entry.data, CONF_SERIAL_PORT: new_port}
                     self.hass.config_entries.async_update_entry(
                         self.config_entry, data=updated
                     )
-                    # Schedule reload for new port usage
+                    # Persist the toggle option BEFORE scheduling the reload so the
+                    # reloaded entry already sees the new value (review finding #1 —
+                    # never schedule the reload while options lack the toggle).
+                    self.hass.config_entries.async_update_entry(
+                        self.config_entry,
+                        options={CONF_IGNORE_UNKNOWN: new_ignore},
+                    )
                     self.hass.config_entries.async_schedule_reload(
                         self.config_entry.entry_id
                     )
-                    return self.async_create_entry(title="", data={})
+                    return self.async_create_entry(
+                        title="", data={CONF_IGNORE_UNKNOWN: new_ignore}
+                    )
             else:
-                # No change
-                return self.async_create_entry(title="", data={})
+                # Port unchanged (toggle changed or nothing changed): persist the
+                # toggle to entry.options and NEVER reload (SC#1 — no stick blip).
+                return self.async_create_entry(
+                    title="", data={CONF_IGNORE_UNKNOWN: new_ignore}
+                )
 
         return self.async_show_form(
             step_id="init",
@@ -70,6 +83,9 @@ class SchellenbergOptionsFlowHandler(OptionsFlow):
                     vol.Required(
                         CONF_SERIAL_PORT, default=current_port
                     ): selector.TextSelector(),
+                    vol.Required(
+                        CONF_IGNORE_UNKNOWN, default=current_ignore
+                    ): selector.BooleanSelector(),
                 }
             ),
             errors=self._errors,
