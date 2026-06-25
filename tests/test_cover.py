@@ -14,7 +14,9 @@ from homeassistant.helpers import device_registry as dr
 
 from custom_components.schellenberg_usb.api import SchellenbergUsbApi
 from custom_components.schellenberg_usb.const import (
+    CONF_BIDIRECTIONAL,
     CONF_CLOSE_TIME,
+    CONF_INITIAL_POSITION,
     CONF_OPEN_TIME,
     CONF_SERIAL_PORT,
     DOMAIN,
@@ -645,3 +647,77 @@ async def test_cover_will_remove_from_hass(
     with patch.object(cover, "_stop_position_tracking") as mock_stop:
         await cover.async_will_remove_from_hass()
         mock_stop.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_cover_mode_attribute(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """Cover built with CONF_BIDIRECTIONAL True exposes mode='bidirectional'; False -> 'timed'."""
+    cover_bi = SchellenbergCover(
+        api=mock_api,
+        device_id="1A",
+        device_enum="1A",
+        device_name="Bi Cover",
+        device_data={CONF_BIDIRECTIONAL: True},
+    )
+    assert cover_bi.extra_state_attributes["mode"] == "bidirectional"
+
+    cover_timed = SchellenbergCover(
+        api=mock_api,
+        device_id="2B",
+        device_enum="2B",
+        device_name="Timed Cover",
+        device_data={CONF_BIDIRECTIONAL: False},
+    )
+    assert cover_timed.extra_state_attributes["mode"] == "timed"
+
+
+@pytest.mark.asyncio
+async def test_cover_mode_defaults_bidirectional_when_key_absent(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """Legacy subentry with NO CONF_BIDIRECTIONAL key reports mode='bidirectional' (read-default True).
+
+    This prevents CTRL-05 regression: existing auto-paired motors must never be mislabeled timed.
+    """
+    # OMIT CONF_BIDIRECTIONAL key entirely — simulates a Phase-1 legacy subentry
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="ABC123",
+        device_enum="10",
+        device_name="Legacy Cover",
+        device_data={"device_id": "ABC123", "device_enum": "10"},
+    )
+    assert cover.extra_state_attributes["mode"] == "bidirectional"
+
+
+@pytest.mark.asyncio
+async def test_cover_initial_position_from_subentry(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """Timed cover with CONF_INITIAL_POSITION 100 seeds position to 100 after async_added_to_hass."""
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="1A",
+        device_enum="1A",
+        device_name="Timed Cover",
+        device_data={
+            CONF_BIDIRECTIONAL: False,
+            CONF_INITIAL_POSITION: 100,
+        },
+    )
+    cover.hass = hass
+
+    with patch.object(cover, "async_get_last_state", return_value=None):
+        with patch(
+            "custom_components.schellenberg_usb.cover.async_dispatcher_connect"
+        ):
+            with patch.object(cover, "async_write_ha_state"):
+                await cover.async_added_to_hass()
+
+    assert cover._attr_current_cover_position == 100
+    assert cover._attr_is_closed is False
