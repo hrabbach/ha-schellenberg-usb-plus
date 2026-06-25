@@ -42,7 +42,14 @@
         "reconfigure": "Calibrer"
       },
       "step": {
-        "user": {
+        "menu": {
+          "title": "Ajouter un volet",
+          "menu_options": {
+            "pair": "Appairer automatiquement",
+            "manual_add": "Ajouter manuellement (déjà appairé)"
+          }
+        },
+        "pair": {
           "title": "Appairer un nouvel appareil",
           "description": "Appuyez sur le bouton d'appairage pour activer le mode d'appairage sur votre clé USB Schellenberg. Ensuite, appuyez sur le bouton d'appairage de votre moteur de volet dans les 2 minutes.",
           "submit": "Appairer"

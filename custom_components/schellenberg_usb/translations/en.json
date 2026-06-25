@@ -44,7 +44,7 @@
         "menu": {
           "title": "Add a blind",
           "menu_options": {
-            "user": "Pair automatically",
+            "pair": "Pair automatically",
             "manual_add": "Add manually (already paired)"
           }
         },
@@ -64,7 +64,7 @@
             "initial_position": "Current position"
           }
         },
-        "user": {
+        "pair": {
           "title": "Pair a new device",
           "description": "Press the pair button to activate pairing mode on your Schellenberg USB stick. Then press the pairing button on your blind motor within 2 minutes.",
           "submit": "Pair"

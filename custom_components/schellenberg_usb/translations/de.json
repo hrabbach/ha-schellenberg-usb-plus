@@ -42,7 +42,14 @@
         "reconfigure": "Kalibrieren"
       },
       "step": {
-        "user": {
+        "menu": {
+          "title": "Rollladen hinzufügen",
+          "menu_options": {
+            "pair": "Automatisch koppeln",
+            "manual_add": "Manuell hinzufügen (bereits gekoppelt)"
+          }
+        },
+        "pair": {
           "title": "Neues Gerät koppeln",
           "description": "Drücken Sie die Kopplungstaste, um den Kopplungsmodus an Ihrem Schellenberg USB-Stick zu aktivieren. Drücken Sie dann innerhalb von 2 Minuten die Kopplungstaste an Ihrem Rollladenmotor.",
           "submit": "Koppeln"

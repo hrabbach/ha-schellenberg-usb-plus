@@ -42,7 +42,14 @@
         "reconfigure": "Calibrar"
       },
       "step": {
-        "user": {
+        "menu": {
+          "title": "Añadir una persiana",
+          "menu_options": {
+            "pair": "Emparejar automáticamente",
+            "manual_add": "Añadir manualmente (ya emparejado)"
+          }
+        },
+        "pair": {
           "title": "Emparejar un nuevo dispositivo",
           "description": "Presione el botón de emparejamiento para activar el modo de emparejamiento en su memoria USB Schellenberg. Luego presione el botón de emparejamiento en su motor de persiana en los próximos 2 minutos.",
           "submit": "Emparejar"

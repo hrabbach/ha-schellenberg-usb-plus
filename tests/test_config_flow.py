@@ -60,14 +60,32 @@ def mock_hub_entry(hass: HomeAssistant) -> ConfigEntry:
 async def test_manual_add_menu_shown(
     hass: HomeAssistant, mock_hub_entry: ConfigEntry
 ) -> None:
-    """Menu step returns show_menu with 'user' and 'manual_add' options."""
+    """The flow entry step (async_step_user) shows the menu.
+
+    Regression: HA initiates user-triggered subentry flows via async_step_user,
+    NOT async_step_{subentry_type}. The menu must therefore be served from
+    async_step_user, with options routing to async_step_pair / async_step_manual_add.
+    """
     handler = _make_handler(hass, mock_hub_entry.entry_id)
 
-    result = await handler.async_step_blind(None)
+    result = await handler.async_step_user(None)
 
     assert result["type"] == "menu"
-    assert "user" in result["menu_options"]
+    assert "pair" in result["menu_options"]
     assert "manual_add" in result["menu_options"]
+
+
+@pytest.mark.asyncio
+async def test_pair_step_shows_form(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """Selecting 'Pair automatically' (async_step_pair) shows the pairing form."""
+    handler = _make_handler(hass, mock_hub_entry.entry_id)
+
+    result = await handler.async_step_pair(None)
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "pair"
 
 
 @pytest.mark.asyncio

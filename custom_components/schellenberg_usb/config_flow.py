@@ -221,26 +221,21 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         """Await a calibration step and cast to SubentryFlowResult for mypy."""
         return cast(SubentryFlowResult, await step_coro)
 
-    async def async_step_blind(
+    async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
         """Entry point when the user clicks the 'Add device' button.
 
-        Home Assistant calls async_step_{subentry_type}() where subentry_type is
-        the key returned by async_get_supported_subentry_types. Since our type is
-        'blind', we implement async_step_blind(). Delegates to async_step_menu
-        so the user can choose between auto-pair and manual-add.
+        Home Assistant initiates user-triggered subentry flows via the `user`
+        step (per HA config-subentry docs) — NOT async_step_{subentry_type}.
+        Show the menu so the user can choose between auto-pair and manual-add.
+        Selecting an option routes to async_step_{option}: 'pair' or
+        'manual_add'.
         """
         _LOGGER.debug("Subentry blind flow initiated")
-        return await self.async_step_menu(user_input)
-
-    async def async_step_menu(
-        self, user_input: dict[str, Any] | None = None
-    ) -> SubentryFlowResult:
-        """Show menu: Pair automatically or Add manually."""
         return self.async_show_menu(
             step_id="menu",
-            menu_options=["user", "manual_add"],
+            menu_options=["pair", "manual_add"],
         )
 
     async def async_step_manual_add(
@@ -365,14 +360,14 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
             last_step=True,
         )
 
-    async def async_step_user(
+    async def async_step_pair(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Handle pairing initialization."""
-        _LOGGER.debug("Pairing step user input: %s", user_input)
+        """Auto-pair: trigger stick pairing and wait for a device to respond."""
+        _LOGGER.debug("Pairing step input: %s", user_input)
         if user_input is None:
             _LOGGER.info("Showing pairing form")
-            return self.async_show_form(step_id="user", data_schema=vol.Schema({}))
+            return self.async_show_form(step_id="pair", data_schema=vol.Schema({}))
 
         # Get the hub entry (parent config entry)
         hub_entry = self._get_entry()
