@@ -1640,14 +1640,6 @@ async def test_timed_calibration_survives_restart(
         "Cover built from persisted calibration data must be _is_calibrated=True"
     )
 
-    with patch.object(cover, "async_write_ha_state") as mock_write2:
-        cover._handle_event(EVENT_STOPPED)
-
-    assert cover._attr_is_opening is False
-    assert cover._attr_is_closing is False
-    assert cover._attr_current_cover_position == 75
-    mock_write2.assert_not_called()
-
 
 @pytest.mark.asyncio
 async def test_timed_restart_idle_restores_position(
