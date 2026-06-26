@@ -423,12 +423,24 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
                     self._attr_name,
                     self._attr_current_cover_position,
                 )
-            else:
+            elif self._is_bidirectional:
+                # Bidirectional: default to 0 (closed) — existing behavior.
                 self._attr_current_cover_position = 0
                 self._attr_is_closed = True
                 _LOGGER.debug(
                     "No previous state for %s (%s);"
                     " defaulting position to 0%% (closed)",
+                    self._attr_name,
+                    self._device_id,
+                )
+            else:
+                # D-09: timed motor with no prior state → assume open (100%%).
+                # Never collapse missing data to 0 (SC#4 slider regression).
+                self._attr_current_cover_position = 100
+                self._attr_is_closed = False
+                _LOGGER.debug(
+                    "No previous state for timed motor %s (%s);"
+                    " defaulting to 100%% (assume open)",
                     self._attr_name,
                     self._device_id,
                 )

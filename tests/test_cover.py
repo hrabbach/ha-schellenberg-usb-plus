@@ -1368,3 +1368,138 @@ async def test_timed_handle_event_ignored(
     assert cover._attr_is_closing is False
     assert cover._attr_current_cover_position == 75
     mock_write2.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_timed_restart_idle_restores_position(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """D-09: idle timed motor restart restores the recorded position as-is.
+
+    A real recorded 0%% (cover fully closed) must survive restart — it must
+    NOT be replaced by initial_position or the 100%% fallback (Pitfall 1:
+    the falsy-0 trap).  Also verifies a non-zero idle case (30%%).
+    """
+    # Case 1: real recorded 0%% — closed cover stays closed
+    cover_zero = SchellenbergCover(
+        api=mock_api,
+        device_id="TM01",
+        device_enum="10",
+        device_name="Timed Motor",
+        device_data={CONF_BIDIRECTIONAL: False, CONF_INITIAL_POSITION: 50},
+    )
+    cover_zero.hass = hass
+
+    last_state_zero = State(
+        "cover.timed_motor", "closed", {"current_position": 0}
+    )
+    with patch.object(
+        cover_zero, "async_get_last_state", return_value=last_state_zero
+    ):
+        with patch(
+            "custom_components.schellenberg_usb.cover"
+            ".async_dispatcher_connect"
+        ):
+            with patch.object(cover_zero, "async_write_ha_state"):
+                await cover_zero.async_added_to_hass()
+
+    assert cover_zero._attr_current_cover_position == 0, (
+        "Real recorded 0%% must survive — must not be replaced by"
+        f" initial_position; got {cover_zero._attr_current_cover_position}"
+    )
+    assert cover_zero._attr_is_closed is True
+
+    # Case 2: non-zero idle restore (30%%)
+    cover_thirty = SchellenbergCover(
+        api=mock_api,
+        device_id="TM02",
+        device_enum="11",
+        device_name="Timed Motor 30",
+        device_data={CONF_BIDIRECTIONAL: False},
+    )
+    cover_thirty.hass = hass
+
+    last_state_thirty = State(
+        "cover.timed_motor_30", "open", {"current_position": 30}
+    )
+    with patch.object(
+        cover_thirty,
+        "async_get_last_state",
+        return_value=last_state_thirty,
+    ):
+        with patch(
+            "custom_components.schellenberg_usb.cover"
+            ".async_dispatcher_connect"
+        ):
+            with patch.object(cover_thirty, "async_write_ha_state"):
+                await cover_thirty.async_added_to_hass()
+
+    assert cover_thirty._attr_current_cover_position == 30
+    assert cover_thirty._attr_is_closed is False
+
+
+@pytest.mark.asyncio
+async def test_timed_restart_no_prior_state_uses_initial_position(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """D-09: timed motor with no prior state uses CONF_INITIAL_POSITION.
+
+    When async_get_last_state returns None AND CONF_INITIAL_POSITION is
+    set, position must be seeded to that value (not 0 and not 100).
+    """
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="TM01",
+        device_enum="10",
+        device_name="Timed Motor",
+        device_data={CONF_BIDIRECTIONAL: False, CONF_INITIAL_POSITION: 70},
+    )
+    cover.hass = hass
+
+    with patch.object(cover, "async_get_last_state", return_value=None):
+        with patch(
+            "custom_components.schellenberg_usb.cover"
+            ".async_dispatcher_connect"
+        ):
+            with patch.object(cover, "async_write_ha_state"):
+                await cover.async_added_to_hass()
+
+    assert cover._attr_current_cover_position == 70
+
+
+@pytest.mark.asyncio
+async def test_timed_restart_no_prior_no_initial_defaults_to_100(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """D-09: timed motor with no prior state and no initial_position defaults
+    to 100%% (assume open), never 0.
+
+    SC#4: the slider must not jump to 0%% after restart.  This is the key
+    regression guard — the existing bidirectional default of 0 must NOT
+    apply to timed motors.
+    """
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="TM01",
+        device_enum="10",
+        device_name="Timed Motor",
+        device_data={CONF_BIDIRECTIONAL: False},
+    )
+    cover.hass = hass
+
+    with patch.object(cover, "async_get_last_state", return_value=None):
+        with patch(
+            "custom_components.schellenberg_usb.cover"
+            ".async_dispatcher_connect"
+        ):
+            with patch.object(cover, "async_write_ha_state"):
+                await cover.async_added_to_hass()
+
+    assert cover._attr_current_cover_position == 100, (
+        "Timed motor with no prior state must default to 100%% (assume open),"
+        f" not 0; got {cover._attr_current_cover_position}"
+    )
+    assert cover._attr_is_closed is False
