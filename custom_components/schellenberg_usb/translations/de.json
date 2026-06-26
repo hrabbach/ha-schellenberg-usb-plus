@@ -80,6 +80,29 @@
           "title": "Kalibrierung abgeschlossen",
           "description": "Kalibrierung für {device_name} abgeschlossen!\n\nGemessene Zeiten:\n- Öffnungszeit: {open_time} Sekunden\n- Schließzeit: {close_time} Sekunden\n\nDiese Zeiten werden verwendet, um die Rollladenposition genau zu verfolgen.",
           "submit": "Fertig"
+        },
+        "timed_cal_precondition": {
+          "title": "Step 1: Precondition",
+          "description": "Before calibrating {device_name}, make sure the shutter is fully open (at the top). Press Next when the shutter is in the fully open position.",
+          "submit": "Next"
+        },
+        "timed_cal_close": {
+          "title": "Step 2: Time the closing run",
+          "description": "{device_name} is now closing. Press Submit when the shutter has fully reached the bottom end position.",
+          "submit": "Submit"
+        },
+        "timed_cal_open": {
+          "title": "Step 3: Time the opening run",
+          "description": "{device_name} is now opening. Press Submit when the shutter has fully reached the top end position.",
+          "submit": "Submit"
+        },
+        "timed_cal_confirm": {
+          "title": "Confirm calibration",
+          "description": "Calibration for {device_name} measured!\n\nMeasured times:\n- Close time: {close_time} s\n- Open time: {open_time} s\n\nPress Done to save, or check Redo to repeat the measurement. If you redo, first return the shutter to the fully open position via your remote.",
+          "data": {
+            "redo": "Redo measurement (return shutter to fully open first)"
+          },
+          "submit": "Done"
         }
       },
       "error": {
@@ -87,7 +110,9 @@
         "pairing_failed": "Kopplung fehlgeschlagen.",
         "calibration_timeout": "Kalibrierung abgelaufen. Der Rollladen hat mehr als 5 Minuten für die Bewegung benötigt. Bitte überprüfen Sie das Gerät und versuchen Sie es erneut.",
         "calibration_start_timeout": "Zeitüberschreitung beim Warten auf die Bewegung des Rollladens. Bitte stellen Sie sicher, dass das Gerät ordnungsgemäß angeschlossen ist, und versuchen Sie es erneut.",
-        "unknown": "Ein unerwarteter Fehler ist während der Kalibrierung aufgetreten. Bitte versuchen Sie es erneut."
+        "unknown": "Ein unerwarteter Fehler ist während der Kalibrierung aufgetreten. Bitte versuchen Sie es erneut.",
+        "timed_cal_too_short": "Run was too short (less than 2 seconds) — likely a double-press or misfire. Please return the shutter to the fully open position via your remote, then try again.",
+        "timed_cal_too_long": "Run exceeded 120 seconds — the shutter may have been left running. Please return the shutter to the fully open position via your remote, then try again within 2 minutes."
       },
       "abort": {
         "pairing_timeout": "Kein Gerät hat innerhalb von 2 Minuten geantwortet. Bitte versuchen Sie es erneut.",

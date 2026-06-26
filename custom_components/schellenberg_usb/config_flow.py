@@ -31,6 +31,7 @@ from .const import (
 )
 from .options_flow import SchellenbergOptionsFlowHandler
 from .options_flow_calibration import CalibrationFlowHandler
+from .options_flow_timed_calibration import TimedCalibrationFlowHandler
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -203,6 +204,7 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         """Initialize the subentry flow."""
         super().__init__()
         self.calibration_handler: CalibrationFlowHandler | None = None
+        self.timed_cal_handler: TimedCalibrationFlowHandler | None = None
         self._pending_device_id: str | None = None
         self._pending_device_enum: str | None = None
         self._pending_device_name: str | None = None
@@ -213,6 +215,12 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         if self.calibration_handler is None:
             self.calibration_handler = CalibrationFlowHandler(self)
         return self.calibration_handler
+
+    def _get_timed_cal_handler(self) -> TimedCalibrationFlowHandler:
+        """Return (and lazily create) the timed calibration flow handler."""
+        if self.timed_cal_handler is None:
+            self.timed_cal_handler = TimedCalibrationFlowHandler(self)
+        return self.timed_cal_handler
 
     async def _await_subentry_result(
         self,
@@ -470,21 +478,33 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         if not device_id:
             return self.async_abort(reason="device_not_found")
 
-        # Guard: timed motors cannot calibrate via the event-waiting CalibrationFlowHandler
-        # (they never send EVENT_STARTED_MOVING_*/EVENT_STOPPED, so calibration hangs).
-        # Use the same missing-key default as cover.py (True = bidirectional) so legacy
-        # flag-less subentries are still treated as bidirectional here (REVIEW-2, T-02-04).
-        # Timed-motor calibration is deferred to Phase 4 / CAL-01.
+        # Route by motor type (CTRL-05 zero-regression requirement):
+        #   - bidirectional motors → legacy event-based CalibrationFlowHandler
+        #   - timed (non-bidirectional) motors → new TimedCalibrationFlowHandler
+        # Use the same missing-key default as cover.py (True = bidirectional)
+        # so legacy flag-less subentries are treated as bidirectional.
         is_bidirectional = bool(subentry.data.get(CONF_BIDIRECTIONAL, True))
+        device_name = subentry.title or f"Blind {device_id}"
+
         if not is_bidirectional:
+            # CAL-01 / D-01: route timed motor to the event-free timed flow.
             _LOGGER.debug(
-                "Reconfigure blocked for timed motor %s: calibration not yet supported",
+                "Reconfigure: routing timed motor %s to TimedCalibrationFlowHandler",
                 device_id,
             )
-            return self.async_abort(reason="timed_calibration_unavailable")
+            handler_tc = self._get_timed_cal_handler()
+            handler_tc.set_selected_device(
+                {
+                    "id": device_id,
+                    "name": device_name,
+                    "enum": device_enum,
+                }
+            )
+            return await self._await_subentry_result(
+                handler_tc.async_step_timed_cal_precondition(user_input)
+            )
 
-        # Build a minimal device record; calibration handler will enrich after timing
-        device_name = subentry.title or f"Blind {device_id}"
+        # Bidirectional motor: use event-based CalibrationFlowHandler (CTRL-05).
         handler.set_selected_device(
             {
                 "id": device_id,
@@ -534,4 +554,43 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         handler = self._get_calibration_handler()
         return await self._await_subentry_result(
             handler.async_step_calibration_complete(user_input)
+        )
+
+    # Delegate all timed-calibration steps to TimedCalibrationFlowHandler.
+    # Each delegate is required so HA can route form step_ids without raising
+    # UnknownStep (Pitfall 5 from RESEARCH.md).
+    async def async_step_timed_cal_precondition(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Delegate to timed calibration handler."""
+        handler = self._get_timed_cal_handler()
+        return await self._await_subentry_result(
+            handler.async_step_timed_cal_precondition(user_input)
+        )
+
+    async def async_step_timed_cal_close(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Delegate to timed calibration handler."""
+        handler = self._get_timed_cal_handler()
+        return await self._await_subentry_result(
+            handler.async_step_timed_cal_close(user_input)
+        )
+
+    async def async_step_timed_cal_open(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Delegate to timed calibration handler."""
+        handler = self._get_timed_cal_handler()
+        return await self._await_subentry_result(
+            handler.async_step_timed_cal_open(user_input)
+        )
+
+    async def async_step_timed_cal_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Delegate to timed calibration handler."""
+        handler = self._get_timed_cal_handler()
+        return await self._await_subentry_result(
+            handler.async_step_timed_cal_confirm(user_input)
         )

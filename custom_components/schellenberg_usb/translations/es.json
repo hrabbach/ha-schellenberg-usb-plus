@@ -80,6 +80,29 @@
           "title": "Calibración completada",
           "description": "¡Calibración de {device_name} completada!\n\nTiempos medidos:\n- Tiempo de apertura: {open_time} segundos\n- Tiempo de cierre: {close_time} segundos\n\nEstos tiempos se utilizarán para rastrear con precisión la posición de la persiana.",
           "submit": "Hecho"
+        },
+        "timed_cal_precondition": {
+          "title": "Step 1: Precondition",
+          "description": "Before calibrating {device_name}, make sure the shutter is fully open (at the top). Press Next when the shutter is in the fully open position.",
+          "submit": "Next"
+        },
+        "timed_cal_close": {
+          "title": "Step 2: Time the closing run",
+          "description": "{device_name} is now closing. Press Submit when the shutter has fully reached the bottom end position.",
+          "submit": "Submit"
+        },
+        "timed_cal_open": {
+          "title": "Step 3: Time the opening run",
+          "description": "{device_name} is now opening. Press Submit when the shutter has fully reached the top end position.",
+          "submit": "Submit"
+        },
+        "timed_cal_confirm": {
+          "title": "Confirm calibration",
+          "description": "Calibration for {device_name} measured!\n\nMeasured times:\n- Close time: {close_time} s\n- Open time: {open_time} s\n\nPress Done to save, or check Redo to repeat the measurement. If you redo, first return the shutter to the fully open position via your remote.",
+          "data": {
+            "redo": "Redo measurement (return shutter to fully open first)"
+          },
+          "submit": "Done"
         }
       },
       "error": {
@@ -87,7 +110,9 @@
         "pairing_failed": "Error en el emparejamiento.",
         "calibration_timeout": "Tiempo de calibración agotado. La persiana tardó más de 5 minutos en completar el movimiento. Por favor, verifique el dispositivo e inténtelo de nuevo.",
         "calibration_start_timeout": "Tiempo de espera agotado para que la persiana comience a moverse. Por favor, asegúrese de que el dispositivo esté correctamente conectado e inténtelo de nuevo.",
-        "unknown": "Se produjo un error inesperado durante la calibración. Por favor, inténtelo de nuevo."
+        "unknown": "Se produjo un error inesperado durante la calibración. Por favor, inténtelo de nuevo.",
+        "timed_cal_too_short": "Run was too short (less than 2 seconds) — likely a double-press or misfire. Please return the shutter to the fully open position via your remote, then try again.",
+        "timed_cal_too_long": "Run exceeded 120 seconds — the shutter may have been left running. Please return the shutter to the fully open position via your remote, then try again within 2 minutes."
       },
       "abort": {
         "pairing_timeout": "Ningún dispositivo respondió en 2 minutos. Por favor, inténtelo de nuevo.",
