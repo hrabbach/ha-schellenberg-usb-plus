@@ -683,6 +683,12 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
 
     async def async_set_cover_position(self, **kwargs: Any) -> None:
         """Move the cover to a specific position."""
+        if not self._is_bidirectional and not self._is_calibrated:
+            _LOGGER.debug(
+                "Timed motor %s: set-position ignored (not calibrated yet)",
+                self._attr_name,
+            )
+            return
         target_position = kwargs[ATTR_POSITION]
 
         if self._attr_current_cover_position is None:
