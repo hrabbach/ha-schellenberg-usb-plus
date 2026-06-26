@@ -15,6 +15,9 @@ from homeassistant.helpers import device_registry as dr
 
 from custom_components.schellenberg_usb.api import SchellenbergUsbApi
 from custom_components.schellenberg_usb.const import (
+    CMD_DOWN,
+    CMD_STOP,
+    CMD_UP,
     CONF_BIDIRECTIONAL,
     CONF_CLOSE_TIME,
     CONF_INITIAL_POSITION,
@@ -847,3 +850,221 @@ async def test_timed_motor_position_loop_clears_flags(
     )
     # Task should be done
     assert loop_task.done(), "Expected position loop task to be done after target reached"
+
+
+# ---------------------------------------------------------------------------
+# CTRL-01: Timed motor open/close dispatch immediately, no event wait
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_timed_open_sends_command_immediately(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """CTRL-01: timed (non-bidirectional) open dispatches CMD_UP immediately.
+
+    No inbound device event is needed — control_blind must be awaited exactly
+    once with CMD_UP upon async_open_cover, with no _handle_event involvement.
+    """
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="TM01",
+        device_enum="10",
+        device_name="Timed Motor",
+        device_data={CONF_BIDIRECTIONAL: False},
+    )
+    cover.hass = hass
+    cover._attr_current_cover_position = 0
+
+    with patch.object(cover, "_start_position_tracking"):
+        with patch.object(cover, "async_write_ha_state"):
+            await cover.async_open_cover()
+
+    assert cover._attr_is_opening is True
+    assert cover._attr_is_closing is False
+    _async_mock(mock_api.control_blind).assert_awaited_once_with(
+        cover._device_enum, CMD_UP
+    )
+
+
+@pytest.mark.asyncio
+async def test_timed_close_sends_command_immediately(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """CTRL-01: timed motor close dispatches CMD_DOWN immediately.
+
+    No inbound device event is needed — control_blind must be awaited exactly
+    once with CMD_DOWN upon async_close_cover, with no _handle_event involvement.
+    """
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="TM01",
+        device_enum="10",
+        device_name="Timed Motor",
+        device_data={CONF_BIDIRECTIONAL: False},
+    )
+    cover.hass = hass
+    cover._attr_current_cover_position = 100
+
+    with patch.object(cover, "_start_position_tracking"):
+        with patch.object(cover, "async_write_ha_state"):
+            await cover.async_close_cover()
+
+    assert cover._attr_is_opening is False
+    assert cover._attr_is_closing is True
+    _async_mock(mock_api.control_blind).assert_awaited_once_with(
+        cover._device_enum, CMD_DOWN
+    )
+
+
+# ---------------------------------------------------------------------------
+# CTRL-02 / D-01: Stop freezes the position estimate for timed motors
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_timed_stop_freezes_at_estimate(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """D-01: async_stop_cover freezes the position estimate (no endstop snap).
+
+    A timed motor mid-open: stop must record the interpolated position at the
+    moment of the stop call — not snap to 0 or 100.  CMD_STOP must be sent
+    exactly once.
+    """
+    import time as _time
+
+    # travel time: 1.0 s → 50% elapsed after 0.5 s from position 0
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="TM01",
+        device_enum="10",
+        device_name="Timed Motor",
+        device_data={
+            CONF_BIDIRECTIONAL: False,
+            CONF_OPEN_TIME: 1.0,
+            CONF_CLOSE_TIME: 1.0,
+        },
+    )
+    cover.hass = hass
+    cover._attr_is_opening = True
+    cover._attr_is_closing = False
+    cover._move_start_position = 0
+    # Backdate start by 0.5 s: 0.5/1.0 * 100 = 50% change → position ~50
+    cover._move_start_time = _time.monotonic() - 0.5
+
+    with patch.object(cover, "_stop_position_tracking"):
+        with patch.object(cover, "async_write_ha_state"):
+            await cover.async_stop_cover()
+
+    assert cover._attr_is_opening is False
+    assert cover._attr_is_closing is False
+    frozen_pos = cover._attr_current_cover_position
+    assert frozen_pos is not None
+    assert 0 < frozen_pos < 100, (
+        f"Expected mid estimate, got {frozen_pos}"
+    )
+    _async_mock(mock_api.control_blind).assert_awaited_once_with(
+        cover._device_enum, CMD_STOP
+    )
+
+
+# ---------------------------------------------------------------------------
+# CTRL-02 / D-02: Full run to completion resets position to 100% / 0%
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_timed_full_open_resets_to_100(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """D-02: full open run (target=None) resets position to 100 via endstop branch.
+
+    _target_position must be None so the loop takes the endstop-completion
+    branch (cover.py:553-580), NOT the partial-move target-reached branch
+    (cover.py:526-551).  _move_start_time is backdated beyond CONF_OPEN_TIME
+    so that _update_position drives position to 100 on the first loop tick.
+    """
+    import time as _time
+
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="TM01",
+        device_enum="10",
+        device_name="Timed Motor",
+        device_data={
+            CONF_BIDIRECTIONAL: False,
+            CONF_OPEN_TIME: 0.2,
+            CONF_CLOSE_TIME: 0.2,
+        },
+    )
+    cover.hass = hass
+    cover._attr_is_opening = True
+    cover._attr_is_closing = False
+    # Explicitly set None so the endstop branch (not partial-move) is taken
+    cover._target_position = None
+    cover._move_start_position = 0
+    # Backdate beyond travel time → elapsed/travel >= 1.0 → position = 100
+    cover._move_start_time = _time.monotonic() - 0.5
+
+    with patch.object(cover, "async_write_ha_state"):
+        loop_task = hass.async_create_task(cover._async_position_update_loop())
+        await asyncio.sleep(0.5)
+
+    assert cover._attr_current_cover_position == 100, (
+        f"Expected 100 after full open, got {cover._attr_current_cover_position}"
+    )
+    assert cover._attr_is_opening is False
+    assert cover._attr_is_closing is False
+    assert loop_task.done(), "Expected loop task done after endstop reset"
+
+
+@pytest.mark.asyncio
+async def test_timed_full_close_resets_to_0(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """D-02: full close run (target=None) resets position to 0 via endstop branch.
+
+    _target_position must be None so the loop takes the endstop-completion
+    branch (cover.py:553-566), NOT the partial-move target-reached branch.
+    _move_start_time is backdated beyond CONF_CLOSE_TIME so the loop exits on
+    the first tick.
+    """
+    import time as _time
+
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="TM01",
+        device_enum="10",
+        device_name="Timed Motor",
+        device_data={
+            CONF_BIDIRECTIONAL: False,
+            CONF_OPEN_TIME: 0.2,
+            CONF_CLOSE_TIME: 0.2,
+        },
+    )
+    cover.hass = hass
+    cover._attr_is_opening = False
+    cover._attr_is_closing = True
+    # Explicitly set None so the endstop branch (not partial-move) is taken
+    cover._target_position = None
+    cover._move_start_position = 100
+    # Backdate beyond travel time → elapsed/travel >= 1.0 → position = 0
+    cover._move_start_time = _time.monotonic() - 0.5
+
+    with patch.object(cover, "async_write_ha_state"):
+        loop_task = hass.async_create_task(cover._async_position_update_loop())
+        await asyncio.sleep(0.5)
+
+    assert cover._attr_current_cover_position == 0, (
+        f"Expected 0 after full close, got {cover._attr_current_cover_position}"
+    )
+    assert cover._attr_is_opening is False
+    assert cover._attr_is_closing is False
+    assert cover._attr_is_closed is True
+    assert loop_task.done(), "Expected loop task done after endstop reset"
