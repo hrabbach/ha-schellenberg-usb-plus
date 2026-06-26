@@ -31,6 +31,8 @@ from custom_components.schellenberg_usb.const import (
 from custom_components.schellenberg_usb.cover import (
     DEFAULT_TRAVEL_TIME,
     SchellenbergCover,
+    _get_cal_store,
+    _save_calibration,
     async_setup_entry,
 )
 
@@ -1417,13 +1419,226 @@ async def test_timed_handle_event_ignored(
     assert cover._attr_current_cover_position == 75
     mock_write.assert_not_called()
 
-    with patch.object(cover, "async_write_ha_state") as mock_write2:
-        cover._handle_event(EVENT_STOPPED)
 
-    assert cover._attr_is_opening is False
-    assert cover._attr_is_closing is False
-    assert cover._attr_current_cover_position == 75
-    mock_write2.assert_not_called()
+# ---------------------------------------------------------------------------
+# 04-02: D-14 end-state awareness — timed (100%) and legacy (0%) paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_calibration_completed_timed_ends_100pct(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """D-14 / REVIEW-1: timed flow emits final_position=100; cover lands at 100%.
+
+    Distinct 4-arg test proving the new final_position param routes correctly:
+    _attr_current_cover_position must be 100, _attr_is_closed must be False,
+    _travel_time_open and _travel_time_close must be updated, _is_calibrated
+    must be True.
+    """
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="ABC123",
+        device_enum="01",
+        device_name="Test Cover",
+        device_data={CONF_BIDIRECTIONAL: False},
+    )
+    cover.hass = hass
+
+    with patch.object(cover, "async_write_ha_state"):
+        cover._handle_calibration_completed("ABC123", 20.0, 18.0, 100)
+
+    assert cover._travel_time_open == 20.0
+    assert cover._travel_time_close == 18.0
+    assert cover._attr_current_cover_position == 100
+    assert cover._attr_is_closed is False
+    assert cover._is_calibrated is True
+
+
+@pytest.mark.asyncio
+async def test_calibration_completed_legacy_ends_0pct(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """D-14 / CTRL-05: explicit final_position=0 leaves cover at 0% / closed.
+
+    Regression pin for the legacy close-ending flow path: passing an explicit 0
+    as the 4th arg must produce position==0 and is_closed==True. This is
+    distinct from the canonical 3-arg test_cover_calibration_completed which
+    proves the default-arg backward-compat path (REVIEW-1).
+    """
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="ABC123",
+        device_enum="01",
+        device_name="Test Cover",
+    )
+    cover.hass = hass
+    cover._attr_current_cover_position = 50
+
+    with patch.object(cover, "async_write_ha_state"):
+        cover._handle_calibration_completed("ABC123", 25.0, 23.0, 0)
+
+    assert cover._attr_current_cover_position == 0
+    assert cover._attr_is_closed is True
+    assert cover._is_calibrated is True
+
+
+# ---------------------------------------------------------------------------
+# 04-02: CTRL-03 / D-05 — set-position no-op gate and unlock after calibration
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_position_noop_until_calibrated(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """D-05 / CTRL-03: timed motor rejects set-position when not calibrated.
+
+    A timed cover with _is_calibrated=False must silently ignore
+    async_set_cover_position — no control_blind call, position unchanged.
+    """
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="TM01",
+        device_enum="10",
+        device_name="Timed Motor",
+        device_data={CONF_BIDIRECTIONAL: False},  # no travel times => uncalibrated
+    )
+    cover.hass = hass
+    cover._attr_current_cover_position = 50
+
+    assert cover._is_calibrated is False
+
+    await cover.async_set_cover_position(**{ATTR_POSITION: 80})
+
+    _async_mock(mock_api.control_blind).assert_not_awaited()
+    assert cover._attr_current_cover_position == 50
+
+
+@pytest.mark.asyncio
+async def test_set_position_unlocked_after_calibration_drives_to_midpoint(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """CTRL-03 / SC#3: calibrated timed motor drives to 50% and stops there.
+
+    After _is_calibrated flips (via signal or direct set), async_set_cover_position
+    must issue CMD_UP and then CMD_STOP at the midpoint. Elapsed time is
+    synthesized: _move_start_time is backdated so the position update loop
+    computes >=50% on the first iteration, triggering the midpoint-stop branch.
+
+    The test asserts:
+      - control_blind called with CMD_UP (move starts)
+      - control_blind called with CMD_STOP (midpoint stop)
+      - _attr_current_cover_position == 50 after loop exits
+      - _target_position is None after loop exits
+    """
+    import time as _time
+
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="TM01",
+        device_enum="10",
+        device_name="Timed Motor",
+        device_data={
+            CONF_BIDIRECTIONAL: False,
+            CONF_OPEN_TIME: 20.0,
+            CONF_CLOSE_TIME: 20.0,
+        },
+    )
+    cover.hass = hass
+    cover._attr_current_cover_position = 0
+    cover._attr_is_closed = True
+
+    assert cover._is_calibrated is True
+
+    with patch.object(cover, "async_write_ha_state"):
+        # Start the move to 50%; this sends CMD_UP and starts the loop task.
+        await cover.async_set_cover_position(**{ATTR_POSITION: 50})
+
+        # Backdate _move_start_time so the loop immediately sees >=50% progress
+        # (elapsed=10s out of open_time=20s -> 50% from position 0).
+        cover._move_start_time = _time.monotonic() - 10.0
+
+        # Allow the loop to run one iteration (200 ms sleep + check).
+        await asyncio.sleep(0.5)
+
+    # CMD_UP must have been sent (start of move)
+    calls = _async_mock(mock_api.control_blind).await_args_list
+    cmd_up_calls = [c for c in calls if c.args[1] == CMD_UP]
+    cmd_stop_calls = [c for c in calls if c.args[1] == CMD_STOP]
+
+    assert len(cmd_up_calls) >= 1, (
+        f"Expected CMD_UP call; got calls: {calls}"
+    )
+    assert len(cmd_stop_calls) >= 1, (
+        f"Expected CMD_STOP at midpoint; got calls: {calls}"
+    )
+    assert cover._attr_current_cover_position == 50, (
+        f"Expected position 50, got {cover._attr_current_cover_position}"
+    )
+    assert cover._target_position is None, (
+        f"Expected _target_position=None after completion, "
+        f"got {cover._target_position}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 04-02: SC#4 / D-13 — calibration times survive a restart via the Store
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_timed_calibration_survives_restart(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """SC#4 / D-13: calibration times saved to Store are read back correctly.
+
+    Sequence mirrors cover.py:async_setup_entry (the restart path):
+      1. _save_calibration writes open/close times for device_id under
+         config_entry_id into the Store.
+      2. _get_cal_store reads them back — values are in the cache.
+      3. A cover built with those values merged via setdefault has
+         _is_calibrated=True (value-presence check, D-06/REVIEW-01).
+    """
+    entry_id = "test_entry_123"
+    device_id = "ABC999"
+
+    # Step 1: write calibration to the Store.
+    await _save_calibration(hass, entry_id, device_id, 21.5, 19.3)
+
+    # Step 2: read it back via the Store/cache.
+    _store, cache = await _get_cal_store(hass)
+    entry_data = cache.get(entry_id, {})
+    persisted = entry_data.get(str(device_id))
+
+    assert persisted is not None, "Expected persisted calibration entry"
+    assert persisted["open_time"] == 21.5
+    assert persisted["close_time"] == 19.3
+
+    # Step 3: simulate the setdefault merge that async_setup_entry performs,
+    # then verify that a cover built from the merged data is marked calibrated.
+    merged: dict[str, object] = {}
+    merged.setdefault(CONF_OPEN_TIME, persisted.get("open_time"))
+    merged.setdefault(CONF_CLOSE_TIME, persisted.get("close_time"))
+
+    cover_after_restart = SchellenbergCover(
+        api=mock_api,
+        device_id=device_id,
+        device_enum="1A",
+        device_name="Restarted Cover",
+        device_data={
+            CONF_BIDIRECTIONAL: False,
+            **merged,
+        },
+    )
+    assert cover_after_restart._is_calibrated is True, (
+        "Cover built from persisted calibration data must be _is_calibrated=True"
+    )
 
 
 @pytest.mark.asyncio

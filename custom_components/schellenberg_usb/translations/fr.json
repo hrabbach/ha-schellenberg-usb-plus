@@ -80,6 +80,29 @@
           "title": "Calibration terminée",
           "description": "Calibration de {device_name} terminée !\n\nTemps mesurés :\n- Temps d'ouverture : {open_time} secondes\n- Temps de fermeture : {close_time} secondes\n\nCes temps seront utilisés pour suivre précisément la position du volet.",
           "submit": "Terminé"
+        },
+        "timed_cal_precondition": {
+          "title": "Step 1: Precondition",
+          "description": "Before calibrating {device_name}, make sure the shutter is fully open (at the top). Press Next when the shutter is in the fully open position.",
+          "submit": "Next"
+        },
+        "timed_cal_close": {
+          "title": "Step 2: Time the closing run",
+          "description": "{device_name} is now closing. Press Submit when the shutter has fully reached the bottom end position.",
+          "submit": "Submit"
+        },
+        "timed_cal_open": {
+          "title": "Step 3: Time the opening run",
+          "description": "{device_name} is now opening. Press Submit when the shutter has fully reached the top end position.",
+          "submit": "Submit"
+        },
+        "timed_cal_confirm": {
+          "title": "Confirm calibration",
+          "description": "Calibration for {device_name} measured!\n\nMeasured times:\n- Close time: {close_time} s\n- Open time: {open_time} s\n\nPress Done to save, or check Redo to repeat the measurement. If you redo, first return the shutter to the fully open position via your remote.",
+          "data": {
+            "redo": "Redo measurement (return shutter to fully open first)"
+          },
+          "submit": "Done"
         }
       },
       "error": {
@@ -87,11 +110,15 @@
         "pairing_failed": "Échec de l'appairage.",
         "calibration_timeout": "Délai de calibration dépassé. Le volet a mis plus de 5 minutes pour terminer le mouvement. Veuillez vérifier l'appareil et réessayer.",
         "calibration_start_timeout": "Délai d'attente dépassé pour le début du mouvement du volet. Veuillez vous assurer que l'appareil est correctement connecté et réessayer.",
-        "unknown": "Une erreur inattendue s'est produite pendant la calibration. Veuillez réessayer."
+        "unknown": "Une erreur inattendue s'est produite pendant la calibration. Veuillez réessayer.",
+        "timed_cal_too_short": "Run was too short (less than 2 seconds) — likely a double-press or misfire. Please return the shutter to the fully open position via your remote, then try again.",
+        "timed_cal_too_long": "Run exceeded 120 seconds — the shutter may have been left running. Please return the shutter to the fully open position via your remote, then try again within 2 minutes."
       },
       "abort": {
         "pairing_timeout": "Aucun appareil n'a répondu dans les 2 minutes. Veuillez réessayer.",
         "pairing_failed": "Échec de l'appairage.",
+        "device_not_found": "The selected device could not be found. Please try again.",
+        "timed_cal_incomplete": "Calibration is incomplete — the open and close times were not both measured. Please start the calibration again.",
         "reconfigure_successful": "Calibration terminée avec succès"
       }
     }

@@ -297,18 +297,24 @@ async def test_manual_add_position_step_timed_only(
 
 
 @pytest.mark.asyncio
-async def test_reconfigure_timed_motor_aborts(
+async def test_reconfigure_timed_motor_enters_timed_flow(
     hass: HomeAssistant, mock_hub_entry: ConfigEntry
 ) -> None:
-    """Reconfigure on a timed subentry aborts with timed_calibration_unavailable.
+    """Reconfigure on a timed subentry enters the new timed calibration flow.
 
-    A bidirectional subentry still reaches the calibration path (form, not abort).
+    Per Phase 4 Plan 01 (REVIEW-4): the timed reconfigure must NO LONGER abort
+    with timed_calibration_unavailable; instead it enters the new TimedCalibrationFlowHandler
+    and shows step_id timed_cal_precondition. A bidirectional subentry still reaches
+    the legacy CalibrationFlowHandler (CTRL-05).
     """
     from custom_components.schellenberg_usb.options_flow_calibration import (
         CalibrationFlowHandler,
     )
+    from custom_components.schellenberg_usb.options_flow_timed_calibration import (
+        TimedCalibrationFlowHandler,
+    )
 
-    # --- Timed motor: must abort ---
+    # --- Timed motor: must enter the new timed flow (NOT abort) ---
     timed_subentry = MagicMock()
     timed_subentry.data = {
         "device_id": "1A",
@@ -318,6 +324,7 @@ async def test_reconfigure_timed_motor_aborts(
     timed_subentry.title = "Timed Blind"
 
     handler_timed = _make_handler(hass, mock_hub_entry.entry_id)
+    handler_timed.context = {"source": "reconfigure", "subentry_id": "sub1"}
 
     with patch.object(
         handler_timed, "_get_reconfigure_subentry", return_value=timed_subentry
@@ -327,18 +334,32 @@ async def test_reconfigure_timed_motor_aborts(
             "async_step_calibration_close",
             new_callable=AsyncMock,
         ) as mock_cal_step:
-            result = await handler_timed.async_step_reconfigure(None)
+            with patch.object(
+                TimedCalibrationFlowHandler,
+                "async_step_timed_cal_precondition",
+                new_callable=AsyncMock,
+                return_value={
+                    "type": "form",
+                    "step_id": "timed_cal_precondition",
+                },
+            ) as mock_timed_step:
+                result = await handler_timed.async_step_reconfigure(None)
 
-    assert result["type"] == "abort", (
-        f"Expected abort for timed motor, got {result['type']!r}"
+    # Timed reconfigure must NOT abort (REVIEW-4)
+    assert result["type"] != "abort", (
+        f"Timed motor reconfigure must NOT abort, got type={result['type']!r}"
     )
-    assert result["reason"] == "timed_calibration_unavailable", (
-        f"Expected timed_calibration_unavailable, got {result['reason']!r}"
+    assert result.get("reason") != "timed_calibration_unavailable", (
+        "timed_calibration_unavailable abort must no longer fire for timed motors"
     )
-    # The event-waiting calibration step must NOT have been called
+    # Must have entered the new timed flow
+    assert result["type"] == "form"
+    assert result["step_id"] == "timed_cal_precondition"
+    mock_timed_step.assert_called_once()
+    # The event-waiting legacy calibration step must NOT have been called
     mock_cal_step.assert_not_called()
 
-    # --- Bidirectional motor: must reach calibration path (form, not abort) ---
+    # --- Bidirectional motor: must reach legacy calibration path (CTRL-05) ---
     bi_subentry = MagicMock()
     bi_subentry.data = {
         "device_id": "ABC123",
@@ -366,7 +387,7 @@ async def test_reconfigure_timed_motor_aborts(
         ):
             result_bi = await handler_bi.async_step_reconfigure(None)
 
-    # Bidirectional reconfigure should NOT be an abort with timed reason
+    # Bidirectional reconfigure must not be an abort with timed reason (CTRL-05)
     assert result_bi.get("reason") != "timed_calibration_unavailable", (
         "Bidirectional motor should not abort with timed_calibration_unavailable"
     )

@@ -489,9 +489,18 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
 
     @callback
     def _handle_calibration_completed(
-        self, device_id: str, open_time: float, close_time: float
+        self,
+        device_id: str,
+        open_time: float,
+        close_time: float,
+        final_position: int = 0,
     ) -> None:
-        """Handle calibration completion for this device."""
+        """Handle calibration completion for this device.
+
+        final_position: timed flow passes 100 (ends open); legacy
+        bidirectional flow passes 0 (ends closed). Default 0 keeps the
+        3-arg legacy dispatcher dispatch backward-compatible (D-14).
+        """
         if device_id != self._device_id:
             return
 
@@ -510,20 +519,22 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
                 )
             )
 
-        # After calibration the device is fully closed
-        self._attr_current_cover_position = 0
-        self._attr_is_closed = True
+        # End-state depends on which flow completed:
+        # timed flow ends open (final_position=100), legacy ends closed (0).
+        self._attr_current_cover_position = final_position
+        self._attr_is_closed = final_position == 0
 
         # Flip calibrated flag so the attribute reflects live state (REVIEW-05).
         # Must run BEFORE async_write_ha_state() so the pushed state is correct.
         self._is_calibrated = True
 
         _LOGGER.info(
-            "Device %s calibration updated: open_time=%.2fs, close_time=%.2fs. "
-            "Cover position set to fully closed (0%%)",
+            "Device %s calibration updated: open_time=%.2fs, close_time=%.2fs."
+            " Cover position set to %d%%",
             self._attr_name,
             open_time,
             close_time,
+            final_position,
         )
 
         self.async_write_ha_state()
