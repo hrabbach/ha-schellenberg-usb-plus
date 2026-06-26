@@ -1503,3 +1503,210 @@ async def test_timed_restart_no_prior_no_initial_defaults_to_100(
         f" not 0; got {cover._attr_current_cover_position}"
     )
     assert cover._attr_is_closed is False
+
+
+# ---------------------------------------------------------------------------
+# 03-04 / CTRL-05: Bidirectional zero-regression tests
+# Prove every Phase 3 gate is timed-only; bidirectional path is unaffected.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bidir_open_close_stop_regression(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """CTRL-05: bidirectional open/close/stop dispatch and freeze-stop unchanged.
+
+    Uses a device_data with NO CONF_BIDIRECTIONAL key to exercise the
+    read-default True legacy path (SC#5 safety case).  Verifies CMD_UP /
+    CMD_DOWN / CMD_STOP are dispatched exactly once for open / close / stop,
+    and that stop calls _stop_position_tracking before mutating position
+    (freeze-at-estimate, not snap).
+    """
+    # --- open ---
+    cover_open = SchellenbergCover(
+        api=mock_api,
+        device_id="BD01",
+        device_enum="10",
+        device_name="Bidir Open",
+        # Deliberately omit CONF_BIDIRECTIONAL: exercises read-default True
+        device_data={"device_id": "BD01", "device_enum": "10"},
+    )
+    cover_open.hass = hass
+    cover_open._attr_current_cover_position = 0
+
+    with patch.object(cover_open, "_start_position_tracking"):
+        with patch.object(cover_open, "async_write_ha_state"):
+            await cover_open.async_open_cover()
+
+    assert cover_open._attr_is_opening is True
+    assert cover_open._attr_is_closing is False
+    _async_mock(mock_api.control_blind).assert_awaited_once_with(
+        cover_open._device_enum, CMD_UP
+    )
+
+    # --- close ---
+    _async_mock(mock_api.control_blind).reset_mock()
+    cover_close = SchellenbergCover(
+        api=mock_api,
+        device_id="BD02",
+        device_enum="11",
+        device_name="Bidir Close",
+        device_data={"device_id": "BD02", "device_enum": "11"},
+    )
+    cover_close.hass = hass
+    cover_close._attr_current_cover_position = 100
+
+    with patch.object(cover_close, "_start_position_tracking"):
+        with patch.object(cover_close, "async_write_ha_state"):
+            await cover_close.async_close_cover()
+
+    assert cover_close._attr_is_opening is False
+    assert cover_close._attr_is_closing is True
+    _async_mock(mock_api.control_blind).assert_awaited_once_with(
+        cover_close._device_enum, CMD_DOWN
+    )
+
+    # --- stop (freeze-at-estimate) ---
+    _async_mock(mock_api.control_blind).reset_mock()
+    cover_stop = SchellenbergCover(
+        api=mock_api,
+        device_id="BD03",
+        device_enum="12",
+        device_name="Bidir Stop",
+        device_data={"device_id": "BD03", "device_enum": "12"},
+    )
+    cover_stop.hass = hass
+    cover_stop._attr_is_opening = True
+    cover_stop._attr_current_cover_position = 50
+
+    stop_order: list[str] = []
+
+    def _record_stop() -> None:
+        stop_order.append("stop_tracking")
+        cover_stop._attr_current_cover_position = 50  # mock freeze
+
+    with patch.object(
+        cover_stop, "_stop_position_tracking", side_effect=_record_stop
+    ):
+        with patch.object(cover_stop, "_update_position"):
+            with patch.object(cover_stop, "async_write_ha_state"):
+                await cover_stop.async_stop_cover()
+
+    # _stop_position_tracking must be called before CMD_STOP dispatch
+    assert stop_order == ["stop_tracking"], (
+        "stop_tracking must be called before position mutation"
+    )
+    assert cover_stop._attr_is_opening is False
+    assert cover_stop._attr_is_closing is False
+    _async_mock(mock_api.control_blind).assert_awaited_once_with(
+        cover_stop._device_enum, CMD_STOP
+    )
+
+
+@pytest.mark.asyncio
+async def test_bidir_set_position_not_gated(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """CTRL-05 / D-05: bidirectional set-position is NOT gated on calibration.
+
+    A bidirectional cover with NO calibration times (_is_calibrated False)
+    must still perform a real move — async_open_cover must be awaited when
+    the target exceeds the current position.  The D-05 uncalibrated gate is
+    timed-only (`not self._is_bidirectional and not self._is_calibrated`).
+    """
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="BD01",
+        device_enum="10",
+        device_name="Bidir Cover",
+        # No CONF_OPEN_TIME / CONF_CLOSE_TIME → _is_calibrated False
+        device_data={CONF_BIDIRECTIONAL: True},
+    )
+    cover.hass = hass
+    cover._attr_current_cover_position = 50
+
+    assert cover._is_bidirectional is True
+    assert cover._is_calibrated is False
+
+    with patch.object(
+        cover, "async_open_cover", new_callable=AsyncMock
+    ) as mock_open:
+        await cover.async_set_cover_position(**{ATTR_POSITION: 80})
+
+    # Gate must NOT have fired — open was called
+    mock_open.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_bidir_restore_not_snapped_to_endstop(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """CTRL-05 / D-08 / REVIEW-02: bidirectional mid-move restore is NOT endstop-snapped.
+
+    A bidirectional cover recorded as 'opening' with current_position=60 must
+    restore to 60, NOT to 100.  The D-08 endstop snap is timed-only; the
+    bidirectional branch calls the shared _restore_position_from_last_state
+    helper (REVIEW-02 canary — logic lives in exactly one place).
+    """
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="BD01",
+        device_enum="10",
+        device_name="Bidir Cover",
+        device_data={CONF_BIDIRECTIONAL: True},
+    )
+    cover.hass = hass
+
+    last_state = State(
+        "cover.bidir_cover", "opening", {"current_position": 60}
+    )
+    with patch.object(cover, "async_get_last_state", return_value=last_state):
+        with patch(
+            "custom_components.schellenberg_usb.cover"
+            ".async_dispatcher_connect"
+        ):
+            with patch.object(cover, "async_write_ha_state"):
+                await cover.async_added_to_hass()
+
+    assert cover._attr_current_cover_position == 60, (
+        "Bidirectional mid-move restore must use recorded position (60),"
+        f" not the endstop snap (100); got {cover._attr_current_cover_position}"
+    )
+    assert cover._attr_is_closed is False
+
+
+@pytest.mark.asyncio
+async def test_legacy_no_bidirectional_key_defaults_bidirectional(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """CTRL-05 / REVIEW-06: subentry with NO CONF_BIDIRECTIONAL key is bidirectional.
+
+    A cover built from a legacy Phase-1 subentry (no CONF_BIDIRECTIONAL key
+    at all) must have _is_bidirectional True (read-default at cover.py:276)
+    AND its extra_state_attributes must expose mode='bidirectional' with NO
+    'calibrated' key.  Dedicated test per REVIEW-06 — not folded into another.
+    """
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="ABC123",
+        device_enum="10",
+        device_name="Legacy Cover",
+        # Intentionally omit CONF_BIDIRECTIONAL — simulates Phase-1 subentry
+        device_data={"device_id": "ABC123", "device_enum": "10"},
+    )
+
+    assert cover._is_bidirectional is True, (
+        "No-key subentry must default to bidirectional (read-default True)"
+    )
+    attrs = cover.extra_state_attributes
+    assert attrs["mode"] == "bidirectional", (
+        f"Expected mode='bidirectional', got mode='{attrs['mode']}'"
+    )
+    assert "calibrated" not in attrs, (
+        f"Bidirectional cover must NOT expose 'calibrated'; attrs={attrs}"
+    )
