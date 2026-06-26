@@ -1071,6 +1071,62 @@ async def test_timed_full_close_resets_to_0(
 
 
 # ---------------------------------------------------------------------------
+# CR-01: A direct Open/Close after an in-flight set_position must NOT inherit
+# the stale partial-move target and stop early.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_open_after_set_position_clears_stale_target(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """CR-01: full Open after an interrupted set_position runs to the endstop.
+
+    Sequence: set_position(50) leaves _target_position=50 while the move is
+    in flight; the user then presses the full Open button (async_open_cover
+    with no target).  The stale target must be cleared so the loop takes the
+    endstop branch and drives to 100 — NOT the partial-move branch that would
+    snap to 50 and stop early.
+    """
+    import time as _time
+
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="TM01",
+        device_enum="10",
+        device_name="Timed Motor",
+        device_data={
+            CONF_BIDIRECTIONAL: False,
+            CONF_OPEN_TIME: 0.2,
+            CONF_CLOSE_TIME: 0.2,
+        },
+    )
+    cover.hass = hass
+    cover._attr_current_cover_position = 0
+    # Simulate an in-flight set_position(50) leaving a stale partial target.
+    cover._target_position = 50
+
+    with patch.object(cover, "async_write_ha_state"):
+        # Full Open button: no target → must clear the stale 50.
+        await cover.async_open_cover()
+        assert cover._target_position is None, (
+            "async_open_cover must clear the stale set-position target"
+        )
+        # Backdate so the loop drives straight past 100 on the first tick.
+        cover._move_start_time = _time.monotonic() - 0.5
+        await asyncio.sleep(0.5)
+
+    assert cover._attr_current_cover_position == 100, (
+        "Expected full Open to reach 100 (not stop at stale target 50), "
+        f"got {cover._attr_current_cover_position}"
+    )
+    assert cover._attr_is_opening is False
+    assert cover._target_position is None
+    mock_api.control_blind.assert_any_call("10", CMD_UP)
+
+
+# ---------------------------------------------------------------------------
 # 03-02: Calibrated flag (D-06 / REVIEW-01) and calibrated attribute (D-07)
 # ---------------------------------------------------------------------------
 
