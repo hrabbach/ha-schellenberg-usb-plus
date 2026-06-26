@@ -134,6 +134,7 @@
       "abort": {
         "pairing_timeout": "No device responded within 2 minutes. Please try again.",
         "pairing_failed": "Pairing failed.",
+        "device_not_found": "The selected device could not be found. Please try again.",
         "reconfigure_successful": "Calibration completed successfully",
         "timed_calibration_unavailable": "Calibration for timed motors is not yet available. It will be added in a future update."
       }
