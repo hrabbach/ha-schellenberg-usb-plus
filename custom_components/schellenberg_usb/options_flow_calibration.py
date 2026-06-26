@@ -488,7 +488,10 @@ class CalibrationFlowHandler:
 
         await storage.async_save(stored_data)
 
-        # Send signal to notify entities that calibration has been completed
+        # Send signal to notify entities that calibration has been completed.
+        # Explicit final_position=0: legacy flow ends on a close run (D-14 /
+        # REVIEW-1). The handler default already covers the 3-arg case, but
+        # passing 0 explicitly documents intent and guards future refactors.
         if self._selected_device is not None:
             async_dispatcher_send(
                 self.flow.hass,
@@ -496,6 +499,7 @@ class CalibrationFlowHandler:
                 self._selected_device["id"],
                 round(open_time, 2),
                 round(close_time, 2),
+                0,
             )
 
     def enable_subentry_creation(
