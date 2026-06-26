@@ -1068,3 +1068,188 @@ async def test_timed_full_close_resets_to_0(
     assert cover._attr_is_closing is False
     assert cover._attr_is_closed is True
     assert loop_task.done(), "Expected loop task done after endstop reset"
+
+
+# ---------------------------------------------------------------------------
+# 03-02: Calibrated flag (D-06 / REVIEW-01) and calibrated attribute (D-07)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_timed_calibrated_flag_requires_both_times(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """_is_calibrated is True only when both CONF_OPEN_TIME and CONF_CLOSE_TIME
+    are present with non-None values (D-06).
+
+    DEFAULT_TRAVEL_TIME fallback must NOT set the flag.  One time only is also
+    not enough — both must be present and non-None.
+    """
+    # No travel times at all → uncalibrated
+    cover_uncal = SchellenbergCover(
+        api=mock_api,
+        device_id="TM01",
+        device_enum="10",
+        device_name="Timed Uncalibrated",
+        device_data={CONF_BIDIRECTIONAL: False},
+    )
+    assert cover_uncal._is_calibrated is False
+
+    # Both times present → calibrated
+    cover_cal = SchellenbergCover(
+        api=mock_api,
+        device_id="TM02",
+        device_enum="11",
+        device_name="Timed Calibrated",
+        device_data={
+            CONF_BIDIRECTIONAL: False,
+            CONF_OPEN_TIME: 30.0,
+            CONF_CLOSE_TIME: 35.0,
+        },
+    )
+    assert cover_cal._is_calibrated is True
+
+    # Only open time present → still uncalibrated
+    cover_open_only = SchellenbergCover(
+        api=mock_api,
+        device_id="TM03",
+        device_enum="12",
+        device_name="Open Only",
+        device_data={
+            CONF_BIDIRECTIONAL: False,
+            CONF_OPEN_TIME: 30.0,
+        },
+    )
+    assert cover_open_only._is_calibrated is False
+
+
+@pytest.mark.asyncio
+async def test_timed_calibrated_flag_rejects_none_values(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """Keys present but values None must NOT count as calibrated (REVIEW-01).
+
+    Value-presence check (`is not None`), not key-presence check (`in dict`).
+    """
+    # Both keys present but both None → uncalibrated
+    cover_both_none = SchellenbergCover(
+        api=mock_api,
+        device_id="TM01",
+        device_enum="10",
+        device_name="Both None",
+        device_data={
+            CONF_BIDIRECTIONAL: False,
+            CONF_OPEN_TIME: None,
+            CONF_CLOSE_TIME: None,
+        },
+    )
+    assert cover_both_none._is_calibrated is False
+
+    # One None, one real value → still uncalibrated
+    cover_one_none = SchellenbergCover(
+        api=mock_api,
+        device_id="TM02",
+        device_enum="11",
+        device_name="One None",
+        device_data={
+            CONF_BIDIRECTIONAL: False,
+            CONF_OPEN_TIME: None,
+            CONF_CLOSE_TIME: 12.0,
+        },
+    )
+    assert cover_one_none._is_calibrated is False
+
+
+@pytest.mark.asyncio
+async def test_timed_calibrated_attribute_in_state(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """extra_state_attributes exposes calibrated for timed motors (D-07).
+
+    Uncalibrated timed motor has calibrated=False; calibrated timed motor has
+    calibrated=True.  Mode remains 'timed' in both cases.
+    """
+    cover_uncal = SchellenbergCover(
+        api=mock_api,
+        device_id="TM01",
+        device_enum="10",
+        device_name="Uncalibrated",
+        device_data={CONF_BIDIRECTIONAL: False},
+    )
+    attrs_uncal = cover_uncal.extra_state_attributes
+    assert attrs_uncal["mode"] == "timed"
+    assert attrs_uncal["calibrated"] is False
+
+    cover_cal = SchellenbergCover(
+        api=mock_api,
+        device_id="TM02",
+        device_enum="11",
+        device_name="Calibrated",
+        device_data={
+            CONF_BIDIRECTIONAL: False,
+            CONF_OPEN_TIME: 30.0,
+            CONF_CLOSE_TIME: 35.0,
+        },
+    )
+    attrs_cal = cover_cal.extra_state_attributes
+    assert attrs_cal["mode"] == "timed"
+    assert attrs_cal["calibrated"] is True
+
+
+@pytest.mark.asyncio
+async def test_bidir_has_no_calibrated_attribute(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """Bidirectional covers must NOT expose a 'calibrated' key (D-07)."""
+    cover_bidir = SchellenbergCover(
+        api=mock_api,
+        device_id="BD01",
+        device_enum="10",
+        device_name="Bidirectional",
+        device_data={CONF_BIDIRECTIONAL: True},
+    )
+    attrs = cover_bidir.extra_state_attributes
+    assert attrs["mode"] == "bidirectional"
+    assert "calibrated" not in attrs
+
+
+# ---------------------------------------------------------------------------
+# 03-02: Uncalibrated set-position no-op gate (D-05)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_timed_set_position_noop_when_uncalibrated(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """D-05: set_position on an uncalibrated timed motor is a silent no-op.
+
+    Neither async_open_cover nor async_close_cover must be called.
+    current_position must remain unchanged.  No exception must be raised.
+    """
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="TM01",
+        device_enum="10",
+        device_name="Timed Motor",
+        device_data={CONF_BIDIRECTIONAL: False},
+    )
+    cover.hass = hass
+    cover._attr_current_cover_position = 50
+
+    with patch.object(
+        cover, "async_open_cover", new_callable=AsyncMock
+    ) as mock_open:
+        with patch.object(
+            cover, "async_close_cover", new_callable=AsyncMock
+        ) as mock_close:
+            await cover.async_set_cover_position(**{ATTR_POSITION: 80})
+
+    mock_open.assert_not_called()
+    mock_close.assert_not_called()
+    assert cover._attr_current_cover_position == 50

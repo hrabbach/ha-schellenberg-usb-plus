@@ -215,7 +215,7 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
 
     _attr_has_entity_name = True
     _attr_should_poll = False
-    _unrecorded_attributes = frozenset({"mode"})
+    _unrecorded_attributes = frozenset({"mode", "calibrated"})
 
     _attr_supported_features = (
         CoverEntityFeature.OPEN
@@ -282,6 +282,15 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
             else None
         )
 
+        # Calibrated = real open AND close times explicitly present (non-None).
+        # The DEFAULT_TRAVEL_TIME fallback does NOT count as calibrated (D-06).
+        # Value-presence check (is not None), not key-presence: a key present
+        # but explicitly set to None must not be treated as calibrated (REVIEW-01).
+        self._is_calibrated: bool = (
+            device_data_dict.get(CONF_OPEN_TIME) is not None
+            and device_data_dict.get(CONF_CLOSE_TIME) is not None
+        )
+
         self._move_start_time: float | None = None
         self._move_start_position: int | None = None
         self._position_update_task: asyncio.Task[None] | None = None
@@ -311,9 +320,12 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return device-specific state attributes."""
-        return {
+        attrs: dict[str, Any] = {
             "mode": "bidirectional" if self._is_bidirectional else "timed",
         }
+        if not self._is_bidirectional:
+            attrs["calibrated"] = self._is_calibrated
+        return attrs
 
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass."""
@@ -435,6 +447,10 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
         # After calibration the device is fully closed
         self._attr_current_cover_position = 0
         self._attr_is_closed = True
+
+        # Flip calibrated flag so the attribute reflects live state (REVIEW-05).
+        # Must run BEFORE async_write_ha_state() so the pushed state is correct.
+        self._is_calibrated = True
 
         _LOGGER.info(
             "Device %s calibration updated: open_time=%.2fs, close_time=%.2fs. "
