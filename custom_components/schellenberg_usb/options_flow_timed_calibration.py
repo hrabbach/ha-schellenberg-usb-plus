@@ -258,12 +258,13 @@ class TimedCalibrationFlowHandler:
         On redo: reset all timing attrs and return to precondition step.
         No partial data is persisted until the user presses Done here (D-11).
         """
-        if (
-            self._selected_device is None
-            or self._open_time is None
-            or self._close_time is None
-        ):
+        if self._selected_device is None:
             return self.flow.async_abort(reason="device_not_found")
+        if self._open_time is None or self._close_time is None:
+            # Device was found; timing state is just incomplete (D-11).
+            # Use an accurate reason so the user isn't misled into
+            # troubleshooting a "missing device".
+            return self.flow.async_abort(reason="timed_cal_incomplete")
 
         if user_input is not None:
             redo = user_input.get("redo", False)

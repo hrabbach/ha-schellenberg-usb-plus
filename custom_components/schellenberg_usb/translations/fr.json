@@ -118,6 +118,7 @@
         "pairing_timeout": "Aucun appareil n'a répondu dans les 2 minutes. Veuillez réessayer.",
         "pairing_failed": "Échec de l'appairage.",
         "device_not_found": "The selected device could not be found. Please try again.",
+        "timed_cal_incomplete": "Calibration is incomplete — the open and close times were not both measured. Please start the calibration again.",
         "reconfigure_successful": "Calibration terminée avec succès"
       }
     }

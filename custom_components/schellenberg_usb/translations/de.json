@@ -118,6 +118,7 @@
         "pairing_timeout": "Kein Gerät hat innerhalb von 2 Minuten geantwortet. Bitte versuchen Sie es erneut.",
         "pairing_failed": "Kopplung fehlgeschlagen.",
         "device_not_found": "The selected device could not be found. Please try again.",
+        "timed_cal_incomplete": "Calibration is incomplete — the open and close times were not both measured. Please start the calibration again.",
         "reconfigure_successful": "Kalibrierung erfolgreich abgeschlossen"
       }
     }
