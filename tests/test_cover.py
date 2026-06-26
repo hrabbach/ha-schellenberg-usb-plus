@@ -12,6 +12,9 @@ from homeassistant.components.cover import ATTR_POSITION
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.entity_platform import (
+    AddConfigEntryEntitiesCallback,
+)
 
 from custom_components.schellenberg_usb.api import SchellenbergUsbApi
 from custom_components.schellenberg_usb.const import (
@@ -1980,4 +1983,186 @@ async def test_legacy_no_bidirectional_key_defaults_bidirectional(
     )
     assert "calibrated" not in attrs, (
         f"Bidirectional cover must NOT expose 'calibrated'; attrs={attrs}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regression: timed calibration must survive the post-save reconfigure reload
+# (timed-cal-uses-default-time) — a 25% close on a 25s-calibrated motor must
+# NOT drive on the 60s DEFAULT_TRAVEL_TIME after the entry is rebuilt.
+# ---------------------------------------------------------------------------
+
+
+def _make_timed_hub_entry(
+    hass: HomeAssistant,
+    entry_id: str,
+    device_id: str,
+    device_enum: str,
+) -> ConfigEntry:
+    """Build a hub config entry carrying a single UNCALIBRATED timed subentry.
+
+    Mirrors the real shipped state: the timed calibration flow never writes
+    CONF_OPEN_TIME/CONF_CLOSE_TIME into subentry.data, so the subentry stays
+    uncalibrated and the Store cache is the only persistent calibration carrier.
+    """
+    subentry = MagicMock()
+    subentry.subentry_id = "sub_timed"
+    subentry.subentry_type = "blind"
+    subentry.data = {
+        "device_id": device_id,
+        "device_enum": device_enum,
+        "device_name": "Timed Cover",
+        CONF_BIDIRECTIONAL: False,
+    }
+    subentry.title = "Timed Cover"
+
+    entry = ConfigEntry(
+        version=1,
+        domain=DOMAIN,
+        title="Schellenberg USB",
+        data={CONF_SERIAL_PORT: "/dev/ttyUSB0"},
+        options={},
+        entry_id=entry_id,
+        state=ConfigEntryState.NOT_LOADED,
+        minor_version=1,
+        source="test",
+        unique_id=None,
+        discovery_keys=MappingProxyType({}),
+        subentries_data=None,
+    )
+    entry.subentries = MappingProxyType(  # type: ignore[misc]
+        {"sub_timed": subentry}
+    )
+    hass.config_entries._entries[entry.entry_id] = entry
+    return entry
+
+
+@pytest.mark.asyncio
+async def test_timed_calibration_survives_reconfigure_reload(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """REGRESSION (timed-cal-uses-default-time): a 25s-calibrated timed motor
+    must keep its 25s close time after the reconfigure-triggered entry reload.
+
+    Drives the REAL flow-handler emit path (NOT the cover's fire-and-forget
+    save). Real shipped sequence reproduced here:
+      1. Initial setup builds the timed cover (UNCALIBRATED — subentry has no
+         CONF_*_TIME, Store empty) -> _travel_time_close == 60 (DEFAULT).
+      2. The timed calibration flow finishes: TimedCalibrationFlowHandler
+         ._emit_calibration_signal runs, which (after the fix) persists the
+         times to the cover calibration Store AND emits the live signal.
+      3. The flow aborts `reconfigure_successful`; HA reloads the entry, which
+         rebuilds the cover via async_setup_entry reading the Store.
+
+    Bug (pre-fix): the flow only emitted the signal and relied on the cover's
+    fire-and-forget save, which raced the reload — the rebuilt cover read an
+    empty Store and came up on the 60s DEFAULT (uncalibrated). A 25% close then
+    drove on 60s instead of 25s.
+
+    With the fix the flow persists BEFORE the signal/abort, so the rebuilt cover
+    re-hydrates the 25s close time and stays calibrated.
+    """
+    # Lazy imports: keep the flow handler dependency local to this regression.
+    from custom_components.schellenberg_usb.options_flow_timed_calibration import (  # noqa: E501
+        TimedCalibrationFlowHandler,
+    )
+
+    entry_id = "test_timed_reconfigure_reload"
+    device_id = "TM7788"
+    device_enum = "12"
+    close_time = 25.0
+    open_time = 25.0
+
+    entry = _make_timed_hub_entry(hass, entry_id, device_id, device_enum)
+    entry.runtime_data = mock_api
+
+    dev_reg = dr.async_get(hass)
+    dev_reg.async_get_or_create(
+        config_entry_id=entry_id,
+        identifiers={(DOMAIN, entry_id)},
+        name="Schellenberg USB Stick",
+        manufacturer="Schellenberg",
+    )
+
+    # --- Step 1: initial setup builds the (uncalibrated) timed cover ----------
+    first_built: list[SchellenbergCover] = []
+
+    def _capture_first(entities: Any, **_kwargs: Any) -> None:
+        first_built.extend(entities)
+
+    await async_setup_entry(
+        hass, entry, cast(AddConfigEntryEntitiesCallback, _capture_first)
+    )
+    assert len(first_built) == 1
+    live_cover = first_built[0]
+    live_cover.hass = hass
+
+    assert live_cover._travel_time_close == DEFAULT_TRAVEL_TIME
+    assert live_cover._is_calibrated is False
+
+    # The live cover must subscribe to SIGNAL_CALIBRATION_COMPLETED exactly as
+    # the real entity does in async_added_to_hass (otherwise the dispatched
+    # signal would reach nobody). Mock state restore + write so the add path
+    # only wires up the dispatcher subscriptions.
+    with patch.object(live_cover, "async_get_last_state", return_value=None):
+        with patch.object(live_cover, "async_write_ha_state"):
+            await live_cover.async_added_to_hass()
+
+    # --- Step 2: run the REAL timed-flow emit (persist + signal) --------------
+    # Build a TimedCalibrationFlowHandler whose mock flow's _get_entry returns
+    # the real hub entry, mirroring the shipped reconfigure delegation.
+    mock_flow = MagicMock()
+    mock_flow.hass = hass
+    mock_flow._get_entry.return_value = entry
+
+    handler = TimedCalibrationFlowHandler(mock_flow)
+    handler.set_selected_device(
+        {"id": device_id, "name": "Timed Cover", "enum": device_enum}
+    )
+    handler._open_time = open_time
+    handler._close_time = close_time
+
+    # Withhold the cover's fire-and-forget save so this test proves the FLOW's
+    # durable persistence — not the racy cover-side task — survives the reload.
+    # Close (not run) the cover-side coroutine to avoid a 'never awaited' leak.
+    def _discard_task(coro: Any) -> MagicMock:
+        if asyncio.iscoroutine(coro):
+            coro.close()
+        return MagicMock()
+
+    with patch.object(live_cover, "async_write_ha_state"):
+        with patch.object(
+            hass, "async_create_task", side_effect=_discard_task
+        ):
+            await handler._emit_calibration_signal()
+
+    # The live instance was updated by the dispatched signal.
+    assert live_cover._travel_time_close == close_time
+    assert live_cover._is_calibrated is True
+
+    # --- Step 3: reconfigure_successful reload rebuilds the cover from Store ---
+    second_built: list[SchellenbergCover] = []
+
+    def _capture_second(entities: Any, **_kwargs: Any) -> None:
+        second_built.extend(entities)
+
+    await async_setup_entry(
+        hass, entry, cast(AddConfigEntryEntitiesCallback, _capture_second)
+    )
+    assert len(second_built) == 1
+    rebuilt_cover = second_built[0]
+
+    # The rebuilt cover is the one HA now drives. It MUST retain the 25s close
+    # time and stay calibrated. Pre-fix it came up on the 60s default.
+    assert rebuilt_cover._travel_time_close == close_time, (
+        "Rebuilt cover lost its calibrated close time after the reconfigure "
+        f"reload: expected {close_time}s, got "
+        f"{rebuilt_cover._travel_time_close}s (DEFAULT_TRAVEL_TIME="
+        f"{DEFAULT_TRAVEL_TIME}). The timed flow must persist to the Store "
+        "before the reload rebuilds the cover."
+    )
+    assert rebuilt_cover._travel_time_open == open_time
+    assert rebuilt_cover._is_calibrated is True, (
+        "Rebuilt cover must remain calibrated after the reconfigure reload."
     )

@@ -295,13 +295,21 @@ class TimedCalibrationFlowHandler:
         )
 
     async def _emit_calibration_signal(self) -> None:
-        """Emit SIGNAL_CALIBRATION_COMPLETED with final_position=100 (D-12, D-14).
+        """Persist calibration, then emit SIGNAL_CALIBRATION_COMPLETED (D-12, D-14).
 
         Payload: (device_id, open_time, close_time, 100)
         The '100' is the final_position — the timed flow ends with the shutter
         fully open (D-14). The cover's _handle_calibration_completed receives
         these four positional args; default=0 in the cover signature preserves
         bidirectional-path compatibility.
+
+        Durability (timed-cal-uses-default-time): the times are saved to the
+        cover calibration Store *here*, AWAITED, BEFORE the signal is emitted
+        and before the flow aborts with `reconfigure_successful`. HA reloads the
+        entry on that abort, and the reload rebuilds the cover by reading the
+        Store — so the write MUST be flushed first. Relying on the cover's
+        fire-and-forget save (cover.py) raced the reload and left the rebuilt
+        cover on DEFAULT_TRAVEL_TIME (60s), uncalibrated.
         """
         if (
             self._selected_device is None
@@ -309,6 +317,21 @@ class TimedCalibrationFlowHandler:
             or self._close_time is None
         ):
             return
+
+        # Persist to the cover calibration Store synchronously so the
+        # reconfigure reload rebuilds the cover with the calibrated times.
+        # Imported lazily to avoid a cover<->flow import cycle at module load.
+        from .cover import _save_calibration
+
+        hub_entry = self.flow._get_entry()
+        await _save_calibration(
+            self.flow.hass,
+            hub_entry.entry_id,
+            self._selected_device["id"],
+            self._open_time,
+            self._close_time,
+        )
+
         async_dispatcher_send(
             self.flow.hass,
             SIGNAL_CALIBRATION_COMPLETED,
