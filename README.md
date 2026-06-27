@@ -224,3 +224,9 @@ Once a timed motor has been calibrated, the position slider in the Home Assistan
 3. Schedule a stop command after the computed fraction of the full-travel time has elapsed.
 
 The integration tracks position by dead-reckoning — it uses the calibrated open and close times to estimate where the shutter is. If the motor is ever moved outside of Home Assistant (e.g., by a physical remote), the tracked position will drift until the next full-travel recalibration.
+
+---
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup and the local quality gate (tests, lint, type-check, and spell-check) every change must pass.

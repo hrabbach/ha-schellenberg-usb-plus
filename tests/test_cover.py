@@ -722,9 +722,7 @@ async def test_cover_initial_position_from_subentry(
     cover.hass = hass
 
     with patch.object(cover, "async_get_last_state", return_value=None):
-        with patch(
-            "custom_components.schellenberg_usb.cover.async_dispatcher_connect"
-        ):
+        with patch("custom_components.schellenberg_usb.cover.async_dispatcher_connect"):
             with patch.object(cover, "async_write_ha_state"):
                 await cover.async_added_to_hass()
 
@@ -749,9 +747,7 @@ async def test_cover_initial_position_clamped(
     cover_clamped.hass = hass
 
     with patch.object(cover_clamped, "async_get_last_state", return_value=None):
-        with patch(
-            "custom_components.schellenberg_usb.cover.async_dispatcher_connect"
-        ):
+        with patch("custom_components.schellenberg_usb.cover.async_dispatcher_connect"):
             with patch.object(cover_clamped, "async_write_ha_state"):
                 await cover_clamped.async_added_to_hass()
 
@@ -772,9 +768,7 @@ async def test_cover_initial_position_clamped(
     last_state = State("cover.restored_cover", "open", {"current_position": 50})
 
     with patch.object(cover_restored, "async_get_last_state", return_value=last_state):
-        with patch(
-            "custom_components.schellenberg_usb.cover.async_dispatcher_connect"
-        ):
+        with patch("custom_components.schellenberg_usb.cover.async_dispatcher_connect"):
             with patch.object(cover_restored, "async_write_ha_state"):
                 await cover_restored.async_added_to_hass()
 
@@ -854,7 +848,9 @@ async def test_timed_motor_position_loop_clears_flags(
         f"Expected position=50 after reaching target, got {cover._attr_current_cover_position}"
     )
     # Task should be done
-    assert loop_task.done(), "Expected position loop task to be done after target reached"
+    assert loop_task.done(), (
+        "Expected position loop task to be done after target reached"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -969,9 +965,7 @@ async def test_timed_stop_freezes_at_estimate(
     assert cover._attr_is_closing is False
     frozen_pos = cover._attr_current_cover_position
     assert frozen_pos is not None
-    assert 0 < frozen_pos < 100, (
-        f"Expected mid estimate, got {frozen_pos}"
-    )
+    assert 0 < frozen_pos < 100, f"Expected mid estimate, got {frozen_pos}"
     _async_mock(mock_api.control_blind).assert_awaited_once_with(
         cover._device_enum, CMD_STOP
     )
@@ -1303,9 +1297,7 @@ async def test_timed_set_position_noop_when_uncalibrated(
     cover.hass = hass
     cover._attr_current_cover_position = 50
 
-    with patch.object(
-        cover, "async_open_cover", new_callable=AsyncMock
-    ) as mock_open:
+    with patch.object(cover, "async_open_cover", new_callable=AsyncMock) as mock_open:
         with patch.object(
             cover, "async_close_cover", new_callable=AsyncMock
         ) as mock_close:
@@ -1341,14 +1333,9 @@ async def test_timed_restart_opening_snaps_to_100(
     )
     cover.hass = hass
 
-    last_state = State(
-        "cover.timed_motor", "opening", {"current_position": 60}
-    )
+    last_state = State("cover.timed_motor", "opening", {"current_position": 60})
     with patch.object(cover, "async_get_last_state", return_value=last_state):
-        with patch(
-            "custom_components.schellenberg_usb.cover"
-            ".async_dispatcher_connect"
-        ):
+        with patch("custom_components.schellenberg_usb.cover.async_dispatcher_connect"):
             with patch.object(cover, "async_write_ha_state"):
                 await cover.async_added_to_hass()
 
@@ -1375,14 +1362,9 @@ async def test_timed_restart_closing_snaps_to_0(
     )
     cover.hass = hass
 
-    last_state = State(
-        "cover.timed_motor", "closing", {"current_position": 40}
-    )
+    last_state = State("cover.timed_motor", "closing", {"current_position": 40})
     with patch.object(cover, "async_get_last_state", return_value=last_state):
-        with patch(
-            "custom_components.schellenberg_usb.cover"
-            ".async_dispatcher_connect"
-        ):
+        with patch("custom_components.schellenberg_usb.cover.async_dispatcher_connect"):
             with patch.object(cover, "async_write_ha_state"):
                 await cover.async_added_to_hass()
 
@@ -1574,9 +1556,7 @@ async def test_set_position_unlocked_after_calibration_drives_to_midpoint(
     cmd_up_calls = [c for c in calls if c.args[1] == CMD_UP]
     cmd_stop_calls = [c for c in calls if c.args[1] == CMD_STOP]
 
-    assert len(cmd_up_calls) >= 1, (
-        f"Expected CMD_UP call; got calls: {calls}"
-    )
+    assert len(cmd_up_calls) >= 1, f"Expected CMD_UP call; got calls: {calls}"
     assert len(cmd_stop_calls) >= 1, (
         f"Expected CMD_STOP at midpoint; got calls: {calls}"
     )
@@ -1584,8 +1564,7 @@ async def test_set_position_unlocked_after_calibration_drives_to_midpoint(
         f"Expected position 50, got {cover._attr_current_cover_position}"
     )
     assert cover._target_position is None, (
-        f"Expected _target_position=None after completion, "
-        f"got {cover._target_position}"
+        f"Expected _target_position=None after completion, got {cover._target_position}"
     )
 
 
@@ -1665,16 +1644,9 @@ async def test_timed_restart_idle_restores_position(
     )
     cover_zero.hass = hass
 
-    last_state_zero = State(
-        "cover.timed_motor", "closed", {"current_position": 0}
-    )
-    with patch.object(
-        cover_zero, "async_get_last_state", return_value=last_state_zero
-    ):
-        with patch(
-            "custom_components.schellenberg_usb.cover"
-            ".async_dispatcher_connect"
-        ):
+    last_state_zero = State("cover.timed_motor", "closed", {"current_position": 0})
+    with patch.object(cover_zero, "async_get_last_state", return_value=last_state_zero):
+        with patch("custom_components.schellenberg_usb.cover.async_dispatcher_connect"):
             with patch.object(cover_zero, "async_write_ha_state"):
                 await cover_zero.async_added_to_hass()
 
@@ -1694,18 +1666,13 @@ async def test_timed_restart_idle_restores_position(
     )
     cover_thirty.hass = hass
 
-    last_state_thirty = State(
-        "cover.timed_motor_30", "open", {"current_position": 30}
-    )
+    last_state_thirty = State("cover.timed_motor_30", "open", {"current_position": 30})
     with patch.object(
         cover_thirty,
         "async_get_last_state",
         return_value=last_state_thirty,
     ):
-        with patch(
-            "custom_components.schellenberg_usb.cover"
-            ".async_dispatcher_connect"
-        ):
+        with patch("custom_components.schellenberg_usb.cover.async_dispatcher_connect"):
             with patch.object(cover_thirty, "async_write_ha_state"):
                 await cover_thirty.async_added_to_hass()
 
@@ -1733,10 +1700,7 @@ async def test_timed_restart_no_prior_state_uses_initial_position(
     cover.hass = hass
 
     with patch.object(cover, "async_get_last_state", return_value=None):
-        with patch(
-            "custom_components.schellenberg_usb.cover"
-            ".async_dispatcher_connect"
-        ):
+        with patch("custom_components.schellenberg_usb.cover.async_dispatcher_connect"):
             with patch.object(cover, "async_write_ha_state"):
                 await cover.async_added_to_hass()
 
@@ -1765,10 +1729,7 @@ async def test_timed_restart_no_prior_no_initial_defaults_to_100(
     cover.hass = hass
 
     with patch.object(cover, "async_get_last_state", return_value=None):
-        with patch(
-            "custom_components.schellenberg_usb.cover"
-            ".async_dispatcher_connect"
-        ):
+        with patch("custom_components.schellenberg_usb.cover.async_dispatcher_connect"):
             with patch.object(cover, "async_write_ha_state"):
                 await cover.async_added_to_hass()
 
@@ -1861,9 +1822,7 @@ async def test_bidir_open_close_stop_regression(
         stop_order.append("stop_tracking")
         cover_stop._attr_current_cover_position = 50  # mock freeze
 
-    with patch.object(
-        cover_stop, "_stop_position_tracking", side_effect=_record_stop
-    ):
+    with patch.object(cover_stop, "_stop_position_tracking", side_effect=_record_stop):
         with patch.object(cover_stop, "_update_position"):
             with patch.object(cover_stop, "async_write_ha_state"):
                 await cover_stop.async_stop_cover()
@@ -1905,9 +1864,7 @@ async def test_bidir_set_position_not_gated(
     assert cover._is_bidirectional is True
     assert cover._is_calibrated is False
 
-    with patch.object(
-        cover, "async_open_cover", new_callable=AsyncMock
-    ) as mock_open:
+    with patch.object(cover, "async_open_cover", new_callable=AsyncMock) as mock_open:
         await cover.async_set_cover_position(**{ATTR_POSITION: 80})
 
     # Gate must NOT have fired — open was called
@@ -1935,14 +1892,9 @@ async def test_bidir_restore_not_snapped_to_endstop(
     )
     cover.hass = hass
 
-    last_state = State(
-        "cover.bidir_cover", "opening", {"current_position": 60}
-    )
+    last_state = State("cover.bidir_cover", "opening", {"current_position": 60})
     with patch.object(cover, "async_get_last_state", return_value=last_state):
-        with patch(
-            "custom_components.schellenberg_usb.cover"
-            ".async_dispatcher_connect"
-        ):
+        with patch("custom_components.schellenberg_usb.cover.async_dispatcher_connect"):
             with patch.object(cover, "async_write_ha_state"):
                 await cover.async_added_to_hass()
 
@@ -2132,9 +2084,7 @@ async def test_timed_calibration_survives_reconfigure_reload(
         return MagicMock()
 
     with patch.object(live_cover, "async_write_ha_state"):
-        with patch.object(
-            hass, "async_create_task", side_effect=_discard_task
-        ):
+        with patch.object(hass, "async_create_task", side_effect=_discard_task):
             await handler._emit_calibration_signal()
 
     # The live instance was updated by the dispatched signal.

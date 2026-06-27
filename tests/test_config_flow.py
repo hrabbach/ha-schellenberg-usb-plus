@@ -204,7 +204,7 @@ async def test_manual_add_invalid_enum(
         assert result["type"] == "form", (
             f"Expected form for input {bad_input!r}, got {result['type']!r}"
         )
-        assert result["errors"].get("device_enum") == "invalid_enum_format", (
+        assert (result["errors"] or {}).get("device_enum") == "invalid_enum_format", (
             f"Expected invalid_enum_format for input {bad_input!r}, "
             f"got {result['errors']!r}"
         )
@@ -230,7 +230,7 @@ async def test_manual_add_duplicate_enum(
         }
     )
     assert result["type"] == "form"
-    assert result["errors"].get("device_enum") == "duplicate_enum"
+    assert (result["errors"] or {}).get("device_enum") == "duplicate_enum"
 
 
 @pytest.mark.asyncio
@@ -413,7 +413,7 @@ async def test_manual_add_enum_case_normalized(
         }
     )
     assert result["type"] == "form"
-    assert result["errors"].get("device_enum") == "duplicate_enum", (
+    assert (result["errors"] or {}).get("device_enum") == "duplicate_enum", (
         "Expected duplicate_enum: '1a'.upper() == '1A' which already exists"
     )
 

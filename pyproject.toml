@@ -29,8 +29,8 @@ test = [
 ]
 
 lint = [
+    "codespell~=2.4.1",
     "mypy~=1.18.2",
-    "pre-commit~=4.5.0",
     "ruff~=0.14.1",
     "types-PyYAML~=6.0.12.20250915",
 ]
@@ -72,3 +72,11 @@ warn_unused_configs = true
 
 [tool.ruff.lint.pycodestyle]
 max-line-length = 80
+
+[tool.codespell]
+# Migrated from the deleted hook-config YAML so the manual gate
+# (`uv run codespell ...`) stays green. Domain terms that look like typos
+# but are intentional (HA APIs, abbreviations, German tech terms).
+ignore-words-list = "hass,alot,datas,dof,dur,farenheit,hist,iff,ines,ist,lightsensor,mut,nd,pres,referer,ser,serie,te,technik,ue,uint,visability,wan,wanna,withing"
+skip = "./.*,*.csv,*.json"
+quiet-level = 2

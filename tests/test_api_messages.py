@@ -266,9 +266,9 @@ async def test_handle_message_unknown_device_warning_default(
         api._handle_message("ss99UNKNOWNZZZZ01PP00")
 
     # Must have at least one WARNING for the unknown device
-    assert any(
-        r.levelno == logging.WARNING for r in caplog.records
-    ), "Expected WARNING log for unknown device when ignore_unknown is False"
+    assert any(r.levelno == logging.WARNING for r in caplog.records), (
+        "Expected WARNING log for unknown device when ignore_unknown is False"
+    )
 
 
 @pytest.mark.asyncio
@@ -289,9 +289,9 @@ async def test_handle_message_unknown_device_debug_when_ignored(
         for r in caplog.records
         if "UNKNOWN" in r.message or "unknown" in r.message.lower()
     ), "Expected DEBUG log for ignored unknown device"
-    assert not any(
-        r.levelno == logging.WARNING for r in caplog.records
-    ), "Expected no WARNING when ignore_unknown is True"
+    assert not any(r.levelno == logging.WARNING for r in caplog.records), (
+        "Expected no WARNING when ignore_unknown is True"
+    )
 
 
 @pytest.mark.asyncio

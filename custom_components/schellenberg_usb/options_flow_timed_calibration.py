@@ -121,9 +121,7 @@ class TimedCalibrationFlowHandler:
             device_enum = self._selected_device.get("enum", "")
             self._close_start_time = time.monotonic()  # D-07 — BEFORE await
             await api.control_blind(device_enum, CMD_DOWN)  # D-04 close-first
-            _LOGGER.debug(
-                "Timed calibration: close command sent to %s", device_enum
-            )
+            _LOGGER.debug("Timed calibration: close command sent to %s", device_enum)
             return self.flow.async_show_form(
                 step_id="timed_cal_close",
                 data_schema=vol.Schema({}),
@@ -196,9 +194,7 @@ class TimedCalibrationFlowHandler:
             device_enum = self._selected_device.get("enum", "")
             self._open_start_time = time.monotonic()  # D-07 — BEFORE await
             await api.control_blind(device_enum, CMD_UP)  # D-04 open-second
-            _LOGGER.debug(
-                "Timed calibration: open command sent to %s", device_enum
-            )
+            _LOGGER.debug("Timed calibration: open command sent to %s", device_enum)
             return self.flow.async_show_form(
                 step_id="timed_cal_open",
                 data_schema=vol.Schema({}),
@@ -243,9 +239,7 @@ class TimedCalibrationFlowHandler:
             )
 
         self._open_time = round(elapsed, 2)
-        _LOGGER.debug(
-            "Timed calibration: open_time recorded as %s s", self._open_time
-        )
+        _LOGGER.debug("Timed calibration: open_time recorded as %s s", self._open_time)
         return await self.async_step_timed_cal_confirm()
 
     async def async_step_timed_cal_confirm(
@@ -283,9 +277,7 @@ class TimedCalibrationFlowHandler:
 
         return self.flow.async_show_form(
             step_id="timed_cal_confirm",
-            data_schema=vol.Schema(
-                {vol.Optional("redo", default=False): bool}
-            ),
+            data_schema=vol.Schema({vol.Optional("redo", default=False): bool}),
             description_placeholders={
                 "device_name": self._selected_device["name"],
                 "open_time": f"{self._open_time:.2f}",

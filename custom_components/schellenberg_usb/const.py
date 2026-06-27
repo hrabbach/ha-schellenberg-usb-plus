@@ -108,7 +108,7 @@ CONF_DEVICE_ID = "device_id"  # Device ID for calibration
 
 # Timed calibration guards (D-08 / D-09)
 CAL_MAX_TRAVEL_TIME = 120  # seconds — reject "walked away" runs (D-08)
-CAL_MIN_TRAVEL_TIME = 2    # seconds — reject double-press/misfire (D-09)
+CAL_MIN_TRAVEL_TIME = 2  # seconds — reject double-press/misfire (D-09)
 
 # Manual-add device mode flag (stored in subentry.data)
 CONF_BIDIRECTIONAL = "bidirectional"  # bool; False = timed/non-bidirectional

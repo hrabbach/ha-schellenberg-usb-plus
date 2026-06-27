@@ -97,8 +97,8 @@ class SchellenbergUsbApi:
             (
                 self._transport,
                 self._protocol,
-            ) = await serial_asyncio.create_serial_connection(
-                self.hass.loop,
+            ) = await serial_asyncio.create_serial_connection(  # type: ignore[assignment]
+                asyncio.get_running_loop(),
                 lambda: SchellenbergProtocol(self._handle_message, self),
                 self.port,
                 baudrate=112500,
@@ -151,7 +151,9 @@ class SchellenbergUsbApi:
             )
             self._is_connecting = False
             # Always retry after 5 seconds
-            self.hass.loop.call_later(5, lambda: self.hass.create_task(self.connect()))
+            asyncio.get_running_loop().call_later(
+                5, lambda: self.hass.async_create_task(self.connect())
+            )
 
     @callback
     def _handle_message(self, message: str) -> None:
@@ -220,7 +222,10 @@ class SchellenbergUsbApi:
         # 00BE = 2 bytes to ignore (address prefix)
         # XXXXXX = 3 bytes device ID (the actual device ID we want)
         # Rest = can be ignored
-        if message.startswith("sl") and len(message) >= 8:
+        # Guard: slice [6:12] requires len >= 12 (end index = 12). The previous
+        # >= 8 guard was a defect (Pattern 2 / T-05-04) — on an 8-11 char frame
+        # the slice silently returns a truncated/empty device_id.
+        if message.startswith("sl") and len(message) >= 12:
             # Extract the device ID: skip "sl" (2 chars) + "00BE" (4 chars) = 6 chars
             # Then take the next 6 characters (3 bytes as hex) = 6 chars
             device_id = message[6:12]
@@ -291,8 +296,7 @@ class SchellenbergUsbApi:
                         # "Ignore unknown signals" hub option is on — demote the
                         # unknown-device line to DEBUG to keep logs quiet (SIG-01).
                         _LOGGER.debug(
-                            "Ignoring signal from unknown device %s "
-                            "(enum=%s, cmd=%s)",
+                            "Ignoring signal from unknown device %s (enum=%s, cmd=%s)",
                             device_id,
                             device_enum,
                             command,
@@ -376,7 +380,7 @@ class SchellenbergUsbApi:
         )
 
         # Create a future to wait for device ID first
-        self._pairing_future = self.hass.loop.create_future()
+        self._pairing_future = asyncio.get_running_loop().create_future()
 
         try:
             # Send sp command to enter pairing/listening mode (like C# does)
@@ -524,7 +528,7 @@ class SchellenbergUsbApi:
             return False
 
         _LOGGER.debug("Verifying Schellenberg USB device")
-        self._verify_future = self.hass.loop.create_future()
+        self._verify_future = asyncio.get_running_loop().create_future()
 
         try:
             # Send the verification command
@@ -695,7 +699,7 @@ class SchellenbergUsbApi:
             return None
 
         _LOGGER.debug("Requesting device ID")
-        self._device_id_future = self.hass.loop.create_future()
+        self._device_id_future = asyncio.get_running_loop().create_future()
 
         try:
             # Send the request command
@@ -780,3 +784,10 @@ class SchellenbergProtocol(asyncio.Protocol):
         """Called when the connection is lost."""
         _LOGGER.warning("Serial port connection lost: %s", exc)
         self.api.update_connection_status(False)
+        # Schedule a reconnect attempt so a runtime USB blip recovers
+        # automatically. Use hass.loop (not asyncio.get_running_loop()) because
+        # this transport callback can be invoked synchronously — e.g. in tests —
+        # where no running loop is present; hass.loop is always the correct loop.
+        self.api.hass.loop.call_later(
+            5, lambda: self.api.hass.async_create_task(self.api.connect())
+        )

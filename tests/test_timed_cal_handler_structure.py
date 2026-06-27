@@ -6,8 +6,6 @@ They fail before Task 1 implementation and pass after it.
 
 from __future__ import annotations
 
-import pytest
-
 
 def test_module_imports() -> None:
     """Handler module and class must be importable (D-01, CAL-01)."""
@@ -48,9 +46,7 @@ def test_handler_methods_exist() -> None:
         "_emit_calibration_signal",
     ]
     for method in required:
-        assert hasattr(TimedCalibrationFlowHandler, method), (
-            f"Missing method: {method}"
-        )
+        assert hasattr(TimedCalibrationFlowHandler, method), f"Missing method: {method}"
 
 
 def test_no_cmd_stop_in_module() -> None:
@@ -60,11 +56,6 @@ def test_no_cmd_stop_in_module() -> None:
     as a call argument.  Docstring references to CMD_STOP are exempt — the
     important invariant is that no executable code references the constant.
     """
-    from custom_components.schellenberg_usb.const import CMD_STOP
-    from custom_components.schellenberg_usb.options_flow_timed_calibration import (
-        TimedCalibrationFlowHandler,
-    )
-
     # CMD_STOP must not be imported into the timed calibration module namespace.
     import custom_components.schellenberg_usb.options_flow_timed_calibration as m
 

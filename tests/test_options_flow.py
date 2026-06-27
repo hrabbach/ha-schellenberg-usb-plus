@@ -63,9 +63,7 @@ async def test_toggle_saves_to_options(
     # the property reads `self.handler`.
     handler.handler = mock_hub_entry.entry_id
 
-    with patch.object(
-        hass.config_entries, "async_schedule_reload"
-    ) as mock_reload:
+    with patch.object(hass.config_entries, "async_schedule_reload") as mock_reload:
         result = await handler.async_step_init(
             user_input={
                 CONF_SERIAL_PORT: "/dev/ttyUSB0",  # unchanged
@@ -109,9 +107,9 @@ async def test_options_form_shows_toggle_default_off(
 
     assert result["type"] == "form"
     schema = result["data_schema"]
+    assert schema is not None
     schema_keys = {
-        (k.schema if hasattr(k, "schema") else k): v
-        for k, v in schema.schema.items()
+        (k.schema if hasattr(k, "schema") else k): v for k, v in schema.schema.items()
     }
     assert "ignore_unknown" in schema_keys, (
         "Expected ignore_unknown field in the options form schema"

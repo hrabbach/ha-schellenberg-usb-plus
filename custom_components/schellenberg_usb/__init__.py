@@ -151,9 +151,7 @@ async def async_setup_entry(
             return
         new_ignore = updated_entry.options.get(CONF_IGNORE_UNKNOWN, False)
         if api_instance.ignore_unknown != new_ignore:
-            _LOGGER.debug(
-                "Live-applying ignore_unknown=%s to running API", new_ignore
-            )
+            _LOGGER.debug("Live-applying ignore_unknown=%s to running API", new_ignore)
             api_instance.ignore_unknown = new_ignore
 
     entry.add_update_listener(_on_entry_updated)
@@ -175,5 +173,6 @@ async def async_unload_entry(
     if unload_ok:
         api: SchellenbergUsbApi = entry.runtime_data
         await api.disconnect()
+        _SETUP_CALLBACKS.pop(entry.entry_id, None)
 
     return unload_ok

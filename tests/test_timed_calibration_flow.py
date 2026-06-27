@@ -76,9 +76,7 @@ def _make_timed_handler(
             "type": "form",
             "step_id": kwargs.get("step_id"),
             "errors": kwargs.get("errors", {}),
-            "description_placeholders": kwargs.get(
-                "description_placeholders", {}
-            ),
+            "description_placeholders": kwargs.get("description_placeholders", {}),
         }
     )
     mock_flow.async_abort = MagicMock(
@@ -147,9 +145,7 @@ async def test_timed_cal_precondition_shows_form(
         ) as mock_step:
             result = await handler.async_step_reconfigure(None)
 
-    assert result["type"] == "form", (
-        f"Expected form, got {result['type']!r}"
-    )
+    assert result["type"] == "form", f"Expected form, got {result['type']!r}"
     assert result["step_id"] == "timed_cal_precondition", (
         f"Expected timed_cal_precondition, got {result.get('step_id')!r}"
     )
@@ -193,7 +189,7 @@ async def test_timed_cal_close_too_short(
 
     assert result["type"] == "form"
     assert result["step_id"] == "timed_cal_close"
-    assert result["errors"].get("base") == "timed_cal_too_short"
+    assert (result["errors"] or {}).get("base") == "timed_cal_too_short"
     # Start time must be reset so the next visit restarts the timer
     assert handler._close_start_time is None
 
@@ -215,7 +211,7 @@ async def test_timed_cal_close_too_long(
 
     assert result["type"] == "form"
     assert result["step_id"] == "timed_cal_close"
-    assert result["errors"].get("base") == "timed_cal_too_long"
+    assert (result["errors"] or {}).get("base") == "timed_cal_too_long"
     assert handler._close_start_time is None
 
 
@@ -245,7 +241,7 @@ async def test_timed_cal_guard_reshow_does_not_redrive(
     # Guard submit — must NOT re-send CMD_DOWN
     result = await handler.async_step_timed_cal_close(user_input={})
 
-    assert result["errors"].get("base") == "timed_cal_too_short"
+    assert (result["errors"] or {}).get("base") == "timed_cal_too_short"
     assert api.control_blind.await_count == count_after_drive, (
         "control_blind must NOT be awaited again on guard re-show (REVIEW-3)"
     )
@@ -305,7 +301,6 @@ async def test_timed_cal_happy_path_reaches_confirm(
     Pins: D-04 (close-then-open order), D-10 (confirm before save).
     """
     handler = _make_timed_handler(hass, mock_hub_entry)
-    api = mock_hub_entry.runtime_data
 
     # Drive close step
     await handler.async_step_timed_cal_close(user_input=None)
@@ -317,13 +312,13 @@ async def test_timed_cal_happy_path_reaches_confirm(
 
     async def capture_open(
         user_input: dict | None = None,
-    ) -> dict:
+    ) -> dict:  # type: ignore[return]
         """Capture the open step result."""
         result = await TimedCalibrationFlowHandler.async_step_timed_cal_open(
             handler, user_input
         )
         captured["open_result"] = result
-        return result
+        return result  # type: ignore[return-value]
 
     with patch.object(handler, "async_step_timed_cal_open", side_effect=capture_open):
         # Submit close end-press (advances to open step via internal call)
@@ -336,16 +331,14 @@ async def test_timed_cal_happy_path_reaches_confirm(
 
     async def intercept_confirm(
         user_input: dict | None = None,
-    ) -> dict:
+    ) -> dict:  # type: ignore[return]
         """Call confirm with user_input=None (show screen)."""
-        return await original_confirm(user_input=None)
+        return await original_confirm(user_input=None)  # type: ignore[return-value]
 
     with patch.object(
         handler, "async_step_timed_cal_confirm", side_effect=intercept_confirm
     ):
-        result_close_submit = await handler.async_step_timed_cal_close(
-            user_input={}
-        )
+        await handler.async_step_timed_cal_close(user_input={})
 
     # After valid close, open step is called internally, then confirm is shown
     # The result from async_step_timed_cal_close (after guard passes) is the
@@ -354,7 +347,6 @@ async def test_timed_cal_happy_path_reaches_confirm(
 
     # Reset and do it manually
     handler2 = _make_timed_handler(hass, mock_hub_entry)
-    api2 = mock_hub_entry.runtime_data
 
     # Step 1: close first visit (sends CMD_DOWN, shows form)
     await handler2.async_step_timed_cal_close(user_input=None)
@@ -371,8 +363,9 @@ async def test_timed_cal_happy_path_reaches_confirm(
     result_confirm_form = await handler2.async_step_timed_cal_open(user_input={})
     assert result_confirm_form["type"] == "form"
     assert result_confirm_form["step_id"] == "timed_cal_confirm"
-    assert "close_time" in result_confirm_form["description_placeholders"]
-    assert "open_time" in result_confirm_form["description_placeholders"]
+    placeholders = result_confirm_form["description_placeholders"] or {}
+    assert "close_time" in placeholders
+    assert "open_time" in placeholders
 
 
 @pytest.mark.asyncio
@@ -391,23 +384,17 @@ async def test_timed_cal_confirm_emits_signal_with_100(
         "custom_components.schellenberg_usb"
         ".options_flow_timed_calibration.async_dispatcher_send"
     ) as mock_send:
-        result = await handler.async_step_timed_cal_confirm(
-            user_input={"redo": False}
-        )
+        result = await handler.async_step_timed_cal_confirm(user_input={"redo": False})
 
     assert result["type"] == "abort"
     assert result["reason"] == "reconfigure_successful"
     mock_send.assert_called_once()
     call_args = mock_send.call_args[0]
-    assert call_args[1] == SIGNAL_CALIBRATION_COMPLETED, (
-        "Signal name mismatch"
-    )
+    assert call_args[1] == SIGNAL_CALIBRATION_COMPLETED, "Signal name mismatch"
     assert call_args[2] == "DEV1A"  # device_id
-    assert call_args[3] == 20.3     # open_time
-    assert call_args[4] == 18.5     # close_time
-    assert call_args[5] == 100, (
-        "final_position must be 100 for timed flow (D-14)"
-    )
+    assert call_args[3] == 20.3  # open_time
+    assert call_args[4] == 18.5  # close_time
+    assert call_args[5] == 100, "final_position must be 100 for timed flow (D-14)"
 
 
 @pytest.mark.asyncio
@@ -428,9 +415,7 @@ async def test_timed_cal_redo_returns_to_precondition(
         "custom_components.schellenberg_usb"
         ".options_flow_timed_calibration.async_dispatcher_send"
     ) as mock_send:
-        result = await handler.async_step_timed_cal_confirm(
-            user_input={"redo": True}
-        )
+        result = await handler.async_step_timed_cal_confirm(user_input={"redo": True})
 
     # No signal emitted on redo
     mock_send.assert_not_called()

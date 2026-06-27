@@ -1,4 +1,5 @@
 """Cover platform for Schellenberg USB."""
+
 from __future__ import annotations
 
 import asyncio
@@ -167,8 +168,11 @@ async def async_setup_entry(
         )
 
         if existing_entity_id:
-            entry_entity = entity_registry.entities[existing_entity_id]
-            if entry_entity.config_subentry_id != subentry.subentry_id:
+            entry_entity = entity_registry.async_get(existing_entity_id)
+            if (
+                entry_entity is not None
+                and entry_entity.config_subentry_id != subentry.subentry_id
+            ):
                 _LOGGER.info(
                     "Updating existing cover entity %s to subentry %s",
                     existing_entity_id,
@@ -222,11 +226,8 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
     _attr_should_poll = False
     _unrecorded_attributes = frozenset({"mode", "calibrated"})
 
-    _attr_supported_features = (
-        CoverEntityFeature.OPEN
-        | CoverEntityFeature.CLOSE
-        | CoverEntityFeature.STOP
-        | CoverEntityFeature.SET_POSITION
+    _BASE_FEATURES = (
+        CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.STOP
     )
 
     def __init__(
@@ -328,6 +329,21 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
         return True
 
     @property
+    def supported_features(self) -> CoverEntityFeature:
+        """Return supported features, adding SET_POSITION only when usable.
+
+        For timed (non-bidirectional) motors, SET_POSITION is only meaningful
+        once calibration data is available. Advertising it on uncalibrated
+        motors shows a position slider in HA's UI that silently does nothing
+        (IN-03) — confusing users. Re-evaluation happens on
+        _handle_calibration_completed via async_write_ha_state().
+        """
+        features = self._BASE_FEATURES
+        if self._is_bidirectional or self._is_calibrated:
+            features = features | CoverEntityFeature.SET_POSITION
+        return features
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return device-specific state attributes."""
         attrs: dict[str, Any] = {
@@ -337,9 +353,7 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
             attrs["calibrated"] = self._is_calibrated
         return attrs
 
-    def _restore_position_from_last_state(
-        self, last_state: Any
-    ) -> None:
+    def _restore_position_from_last_state(self, last_state: Any) -> None:
         """Restore cover position from a HA last-known state.
 
         Contains the generic recorded-position restore logic: raw_position
@@ -369,9 +383,7 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
                 restored_position = 0
 
         if restored_position is not None:
-            self._attr_current_cover_position = max(
-                0, min(100, restored_position)
-            )
+            self._attr_current_cover_position = max(0, min(100, restored_position))
             self._attr_is_closed = self._attr_current_cover_position == 0
             _LOGGER.debug(
                 "Restored position for %s (%s) to %d%% (raw=%s)",
@@ -398,16 +410,14 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
                 self._attr_current_cover_position = 100
                 self._attr_is_closed = False
                 _LOGGER.debug(
-                    "Timed motor %s was opening at restart,"
-                    " snapping to 100%%",
+                    "Timed motor %s was opening at restart, snapping to 100%%",
                     self._attr_name,
                 )
             elif last_state.state == "closing":
                 self._attr_current_cover_position = 0
                 self._attr_is_closed = True
                 _LOGGER.debug(
-                    "Timed motor %s was closing at restart,"
-                    " snapping to 0%%",
+                    "Timed motor %s was closing at restart, snapping to 0%%",
                     self._attr_name,
                 )
             else:
@@ -596,7 +606,9 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
             self._target_position = None
 
         else:
-            _LOGGER.debug("Device %s received unknown event: %s", self._attr_name, event)
+            _LOGGER.debug(
+                "Device %s received unknown event: %s", self._attr_name, event
+            )
 
         self.async_write_ha_state()
 
@@ -712,9 +724,7 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
         else:
             return
 
-        self._attr_current_cover_position = max(
-            0, min(100, int(round(new_pos)))
-        )
+        self._attr_current_cover_position = max(0, min(100, int(round(new_pos))))
         self._attr_is_closed = self._attr_current_cover_position == 0
 
         _LOGGER.debug(
@@ -725,9 +735,7 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
             travel_time,
         )
 
-    async def async_open_cover(
-        self, target: int | None = None, **kwargs: Any
-    ) -> None:
+    async def async_open_cover(self, target: int | None = None, **kwargs: Any) -> None:
         """Open the cover.
 
         ``target`` is the partial-move target for a set-position driven
@@ -749,9 +757,7 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
         self.async_write_ha_state()
         await self._api.control_blind(self._device_enum, CMD_UP)
 
-    async def async_close_cover(
-        self, target: int | None = None, **kwargs: Any
-    ) -> None:
+    async def async_close_cover(self, target: int | None = None, **kwargs: Any) -> None:
         """Close cover.
 
         ``target`` is the partial-move target for a set-position driven

@@ -40,14 +40,21 @@ class SchellenbergOptionsFlowHandler(OptionsFlow):
             new_ignore = user_input.get(CONF_IGNORE_UNKNOWN, False)
             if new_port != current_port:
                 try:
-                    serial_conn = serial.Serial(new_port)
-                    serial_conn.close()
+                    # Run blocking serial open in the executor to avoid blocking
+                    # the HA event loop (WR-07 / CR-02 pattern).
+                    def _open_serial(p: str) -> None:
+                        conn = serial.Serial(p)
+                        conn.close()
+
+                    await self.hass.async_add_executor_job(_open_serial, new_port)
                 except serial.SerialException:
                     _LOGGER.error(
                         "Failed to open serial port %s during options save", new_port
                     )
                     self._errors["base"] = "cannot_connect"
-                except Exception:
+                except Exception:  # noqa: BLE001
+                    # HA options flow must surface 'unknown' to the user rather than
+                    # crashing the flow; broad catch is intentional (RESEARCH Pitfall 7).
                     _LOGGER.exception("Unexpected error validating port %s", new_port)
                     self._errors["base"] = "unknown"
                 else:

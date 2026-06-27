@@ -225,8 +225,8 @@ class CalibrationFlowHandler:
                     last_step=False,
                 )
 
-            # Start timing the open movement
-            self._calibration_start_time = time.time()
+            # Start timing the open movement (before await — CR-03: use monotonic clock)
+            self._calibration_start_time = time.monotonic()
 
             # Wait for device to stop moving
             stop_ok = await self._wait_for_stop_event()
@@ -243,13 +243,17 @@ class CalibrationFlowHandler:
                 )
 
             # Record the open time
-            self._open_time = time.time() - self._calibration_start_time
+            self._open_time = time.monotonic() - self._calibration_start_time
             _LOGGER.debug("Calibration open_time: %s seconds", self._open_time)
 
             # Move to close instruction step
             return await self.async_step_calibration_close_instruction()
 
         except Exception:  # noqa: BLE001
+            # Broad catch intentional: unexpected errors (asyncio cancellation,
+            # dispatcher internals) must set errors["base"] and return the form
+            # rather than crash the flow. Log for diagnostics (CR-04).
+            _LOGGER.exception("Calibration open step failed unexpectedly")
             errors["base"] = "unknown"
             return self.flow.async_show_form(
                 step_id="calibration_open_instruction",
@@ -298,8 +302,8 @@ class CalibrationFlowHandler:
                     last_step=False,
                 )
 
-            # Start timing the close movement
-            self._calibration_start_time = time.time()
+            # Start timing the close movement (before await — CR-03: use monotonic clock)
+            self._calibration_start_time = time.monotonic()
 
             # Wait for device to stop moving
             stop_ok = await self._wait_for_stop_event()
@@ -316,13 +320,17 @@ class CalibrationFlowHandler:
                 )
 
             # Record the close time
-            self._close_time = time.time() - self._calibration_start_time
+            self._close_time = time.monotonic() - self._calibration_start_time
             _LOGGER.debug("Calibration close_time: %s seconds", self._close_time)
 
             # Move to completion step
             return await self.async_step_calibration_complete()
 
         except Exception:  # noqa: BLE001
+            # Broad catch intentional: unexpected errors (asyncio cancellation,
+            # dispatcher internals) must set errors["base"] and return the form
+            # rather than crash the flow. Log for diagnostics (CR-04).
+            _LOGGER.exception("Calibration close step failed unexpectedly")
             errors["base"] = "unknown"
             return self.flow.async_show_form(
                 step_id="calibration_close_instruction",
@@ -397,14 +405,15 @@ class CalibrationFlowHandler:
             return False
         device_id = self._selected_device["id"]
         self._start_event = asyncio.Event()
-        loop = asyncio.get_event_loop()
 
         # Set up listener for movement start events
+        # HA's async_dispatcher_connect callbacks run in the event loop thread,
+        # so a direct .set() is correct; call_soon_threadsafe is not needed (WR-08).
         def handle_device_event(command: str) -> None:
             """Handle device event."""
             if command == event_type:
                 if self._start_event:
-                    loop.call_soon_threadsafe(self._start_event.set)
+                    self._start_event.set()
 
         # Subscribe to device events
         self._event_listener_unsub = async_dispatcher_connect(
@@ -439,14 +448,15 @@ class CalibrationFlowHandler:
             return False
         device_id = self._selected_device["id"]
         self._stop_event = asyncio.Event()
-        loop = asyncio.get_event_loop()
 
         # Set up listener for stop events
+        # HA's async_dispatcher_connect callbacks run in the event loop thread,
+        # so a direct .set() is correct; call_soon_threadsafe is not needed (WR-08).
         def handle_device_event(command: str) -> None:
             """Handle device event."""
             if command == EVENT_STOPPED:
                 if self._stop_event:
-                    loop.call_soon_threadsafe(self._stop_event.set)
+                    self._stop_event.set()
 
         # Subscribe to device events
         self._event_listener_unsub = async_dispatcher_connect(
@@ -470,37 +480,56 @@ class CalibrationFlowHandler:
             self._stop_event = None
 
     async def _save_calibration_data(self, open_time: float, close_time: float) -> None:
-        """Save calibration times to device storage and set cover position.
+        """Save calibration times to cover calibration store and set cover position.
+
+        Uses cover._save_calibration() (same store key as cover.py reads from)
+        to fix the CR-05 key mismatch where the old code wrote to STORAGE_KEY
+        ('schellenberg_usb_devices') while cover.py reads from '_CAL_STORE_KEY'
+        ('schellenberg_usb_calibration').
 
         After calibration completes, the device is in fully closed position,
         so we update the cover entity position to 0.
         """
-        storage: Store = Store(self.flow.hass, STORAGE_VERSION, STORAGE_KEY)
-        stored_data = await storage.async_load() or {"devices": []}
+        if self._selected_device is None:
+            return
 
-        # Find and update the device
-        if self._selected_device is not None:
-            for device in stored_data.get("devices", []):
-                if device["id"] == self._selected_device["id"]:
-                    device[CONF_OPEN_TIME] = round(open_time, 2)
-                    device[CONF_CLOSE_TIME] = round(close_time, 2)
-                    break
+        # Resolve the hub entry_id regardless of flow type
+        # (OptionsFlow has config_entry; ConfigSubentryFlow has _get_entry())
+        hub_entry = (
+            getattr(self.flow, "config_entry", None)
+            or getattr(self.flow, "_get_entry", lambda: None)()
+        )
+        if hub_entry is None:
+            _LOGGER.error(
+                "CR-05: Cannot resolve hub entry from flow %s — calibration not saved",
+                type(self.flow).__name__,
+            )
+            return
 
-        await storage.async_save(stored_data)
+        # Lazy import to avoid a cover<->flow import cycle at module load
+        # (same pattern as options_flow_timed_calibration.py line 324).
+        from .cover import _save_calibration  # noqa: PLC0415
+
+        await _save_calibration(
+            self.flow.hass,
+            hub_entry.entry_id,
+            self._selected_device["id"],
+            round(open_time, 2),
+            round(close_time, 2),
+        )
 
         # Send signal to notify entities that calibration has been completed.
         # Explicit final_position=0: legacy flow ends on a close run (D-14 /
         # REVIEW-1). The handler default already covers the 3-arg case, but
         # passing 0 explicitly documents intent and guards future refactors.
-        if self._selected_device is not None:
-            async_dispatcher_send(
-                self.flow.hass,
-                SIGNAL_CALIBRATION_COMPLETED,
-                self._selected_device["id"],
-                round(open_time, 2),
-                round(close_time, 2),
-                0,
-            )
+        async_dispatcher_send(
+            self.flow.hass,
+            SIGNAL_CALIBRATION_COMPLETED,
+            self._selected_device["id"],
+            round(open_time, 2),
+            round(close_time, 2),
+            0,
+        )
 
     def enable_subentry_creation(
         self,

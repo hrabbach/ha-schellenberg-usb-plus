@@ -84,10 +84,13 @@ class SchellenbergUsbConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             port = user_input[CONF_SERIAL_PORT]
             try:
-                # Quick, blocking sanity check that the port is reachable.
-                serial_conn = serial.Serial(port)
+                # Run blocking serial open in the executor to avoid blocking the
+                # HA event loop (CR-02 — serial.Serial() can block for 100-500ms).
+                def _open_serial(p: str) -> None:
+                    conn = serial.Serial(p)
+                    conn.close()
 
-                serial_conn.close()
+                await self.hass.async_add_executor_job(_open_serial, port)
 
                 # Use the port path as the unique ID when set up manually.
                 await self.async_set_unique_id(port, raise_on_progress=False)
@@ -99,8 +102,10 @@ class SchellenbergUsbConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except serial.SerialException:
                 errors["base"] = "cannot_connect"
                 _LOGGER.error("Failed to connect to serial port %s", port)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 errors["base"] = "unknown"
+                # HA config-flow must surface 'unknown' to the user rather than
+                # crashing the flow; broad catch is intentional here (RESEARCH Pitfall 7).
                 _LOGGER.exception("An unexpected error occurred")
 
         return self._form_schema(errors, default_port="/dev/ttyUSB0")
@@ -148,8 +153,13 @@ class SchellenbergUsbConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             port = user_input[CONF_SERIAL_PORT]
             try:
-                serial_conn = serial.Serial(port)
-                serial_conn.close()
+                # Run blocking serial open in the executor to avoid blocking the
+                # HA event loop (CR-02 — serial.Serial() can block for 100-500ms).
+                def _open_serial(p: str) -> None:
+                    conn = serial.Serial(p)
+                    conn.close()
+
+                await self.hass.async_add_executor_job(_open_serial, port)
 
                 # unique_id was already set in async_step_usb(), re-assert and create the entry
                 await self.async_set_unique_id(
@@ -164,8 +174,10 @@ class SchellenbergUsbConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except serial.SerialException:
                 errors["base"] = "cannot_connect"
                 _LOGGER.error("Failed to connect to serial port %s", port)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 errors["base"] = "unknown"
+                # HA config-flow must surface 'unknown' to the user rather than
+                # crashing the flow; broad catch is intentional here (RESEARCH Pitfall 7).
                 _LOGGER.exception("An unexpected error occurred during USB confirm")
 
         # Mark as confirm-only so the UI shows a simple confirmation experience
@@ -282,12 +294,8 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
 
             if not errors:
                 # Resolve mode — BooleanSelector returns a real Python bool
-                is_bidirectional: bool = bool(
-                    user_input.get(CONF_BIDIRECTIONAL, True)
-                )
-                device_name = (
-                    user_input.get("device_name") or f"Blind {device_enum}"
-                )
+                is_bidirectional: bool = bool(user_input.get(CONF_BIDIRECTIONAL, True))
+                device_name = user_input.get("device_name") or f"Blind {device_enum}"
                 self._pending_device_enum = device_enum
                 self._pending_device_name = device_name
                 self._pending_is_bidirectional = is_bidirectional
@@ -307,9 +315,7 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
                         unique_id=device_enum,
                     )
                 # Timed: advance to initial-position step
-                _LOGGER.debug(
-                    "Timed motor %s: advancing to position step", device_enum
-                )
+                _LOGGER.debug("Timed motor %s: advancing to position step", device_enum)
                 return await self.async_step_manual_position()
 
         return self.async_show_form(
@@ -476,6 +482,10 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         device_id = subentry.data.get("device_id")
         device_enum = subentry.data.get("device_enum")
         if not device_id:
+            return self.async_abort(reason="device_not_found")
+        if not device_enum:
+            # WR-13: device_enum=None would produce malformed protocol command
+            # f"ss{None}9{CMD_DOWN}0000" sent to the USB stick.
             return self.async_abort(reason="device_not_found")
 
         # Route by motor type (CTRL-05 zero-regression requirement):
