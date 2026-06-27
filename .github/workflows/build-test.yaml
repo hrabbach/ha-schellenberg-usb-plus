@@ -43,9 +43,5 @@ jobs:
       - name: Install the project
         run: uv sync --locked --all-extras --dev
 
-      - uses: pre-commit/action@v3.0.0
-        env:
-          SKIP: pytest
-
       - name: Run pytest
         run: uv run pytest
