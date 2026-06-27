@@ -2938,7 +2938,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-homeassistant-custom-component", specifier = "==0.13.299" },
-    { name = "pyyaml", specifier = "~=6.0.2" },
+    { name = "pyyaml", specifier = "~=6.0.3" },
     { name = "ruff", specifier = "~=0.14.1" },
     { name = "types-pyyaml", specifier = "~=6.0.12.20250915" },
     { name = "watchdog", specifier = "~=6.0.0" },
@@ -2958,7 +2958,7 @@ test = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-homeassistant-custom-component", specifier = "==0.13.299" },
-    { name = "pyyaml", specifier = "~=6.0.2" },
+    { name = "pyyaml", specifier = "~=6.0.3" },
     { name = "watchdog", specifier = "~=6.0.0" },
 ]
 
