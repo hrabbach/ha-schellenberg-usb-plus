@@ -23,8 +23,8 @@ fundamental platform constraint.
 ## Getting the Repo
 
 ```bash
-git clone https://github.com/hrabbach/schellenberg_usb.git
-cd schellenberg_usb
+git clone https://github.com/hrabbach/ha-schellenberg-usb-plus.git
+cd ha-schellenberg-usb-plus
 ```
 
 ## Dual Venv Setup (Critical)

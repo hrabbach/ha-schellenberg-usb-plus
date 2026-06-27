@@ -1,12 +1,12 @@
-# schellenberg_usb Home Assistant Component
+# Schellenberg USB+ — Home Assistant Integration
 
-[![GitHub Release](https://img.shields.io/github/release/hrabbach/schellenberg_usb.svg)](https://github.com/hrabbach/schellenberg_usb/releases)
-[![License](https://img.shields.io/github/license/hrabbach/schellenberg_usb.svg)](https://github.com/hrabbach/schellenberg_usb/blob/main/LICENSE)
-![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/hrabbach/schellenberg_usb/build-test.yaml)
+[![GitHub Release](https://img.shields.io/github/release/hrabbach/ha-schellenberg-usb-plus.svg)](https://github.com/hrabbach/ha-schellenberg-usb-plus/releases)
+[![License](https://img.shields.io/github/license/hrabbach/ha-schellenberg-usb-plus.svg)](https://github.com/hrabbach/ha-schellenberg-usb-plus/blob/main/LICENSE)
+![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/hrabbach/ha-schellenberg-usb-plus/build-test.yaml)
 
-> Maintained fork of [GimpArm/schellenberg_usb](https://github.com/GimpArm/schellenberg_usb), building on
-> [ohlmannmichael-ai/schellenberg_usb](https://github.com/ohlmannmichael-ai/schellenberg_usb), which introduced
-> calibration persistence. Thanks to both for their work.
+> Based on the original work by [Scott Downing (GimpArm)](https://github.com/GimpArm/schellenberg_usb),
+> with calibration persistence introduced by
+> [ohlmannmichael-ai](https://github.com/ohlmannmichael-ai/schellenberg_usb).
 
 Home Assistant component that interfaces with the [Schellenberg Usb Funk-Stick](https://www.schellenberg.de/smart-home-produkte/smart-home-steuerzentralen/funk-stick/21009/).
 
@@ -14,7 +14,7 @@ Home Assistant component that interfaces with the [Schellenberg Usb Funk-Stick](
 > This integration is not affiliated with Schellenberg, the developers take no responsibility for anything that happens to
 > your devices because of this library.
 
-![Schellenberg](https://raw.githubusercontent.com/hrabbach/schellenberg_usb/main/images/schellenberg-logo.png)
+![Schellenberg](https://raw.githubusercontent.com/hrabbach/ha-schellenberg-usb-plus/main/images/schellenberg-logo.png)
 
 ## Features
 
@@ -27,10 +27,10 @@ Home Assistant component that interfaces with the [Schellenberg Usb Funk-Stick](
 
 #### Option 1: Via HACS
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=hrabbach&repository=schellenberg_usb&category=integration)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=hrabbach&repository=ha-schellenberg-usb-plus&category=integration)
 
 Make sure you have HACS installed. If you don't, run `wget -O - https://get.hacs.xyz | bash -` in HA.  
-Choose Integrations under HACS. Click the '+' button on the bottom of the page, search for "schellenberg usb", choose it, and click install in HACS.
+Choose Integrations under HACS. Click the '+' button on the bottom of the page, search for "Schellenberg USB+", choose it, and click install in HACS.
 
 #### Option 2: Manual
 Clone this repository or download the source code as a zip file and add/merge the `custom_components/` folder with its contents in your configuration directory.
@@ -43,14 +43,14 @@ In order for the newly added integration to be loaded, HA needs to be restarted.
 In HA, go to Configuration > Integrations.
 In the bottom right corner, click on the big button with a '+'.
 
-If the component is properly installed, you should be able to find 'Schellenberg USB' in the list. You might need to clear you browser cache for the integration to show up.
+If the component is properly installed, you should be able to find 'Schellenberg USB+' in the list. You might need to clear you browser cache for the integration to show up.
 
-Select it, and the schellenberg usb integration is ready for use.
+Select it, and the Schellenberg USB+ integration is ready for use.
 
 ### Step 4: Pair your devices
 
 1. In Home Assistant, go to **Settings > Devices & Services**
-2. Find the **Schellenberg USB** integration and click on it
+2. Find the **Schellenberg USB+** integration and click on it
 3. Click the **+** button or select **Pair device** from the menu
 4. Put your blind motor into pairing mode (see [Device Pairing Instructions](#device-pairing-instructions))
 5. Once pairing is successful, provide a friendly name for your blind
@@ -151,7 +151,7 @@ You select the motor type once, when adding the device. A timed motor requires a
 If a motor is already paired (for example it responds to an existing Schellenberg remote) you can add it to Home Assistant without triggering the radio-pairing procedure:
 
 1. In Home Assistant, go to **Settings > Devices & Services**.
-2. Find the **Schellenberg USB** integration and click on it.
+2. Find the **Schellenberg USB+** integration and click on it.
 3. Click the **+** button to add a device.
 4. When the menu appears, choose **Add manually**.
 5. Enter the motor's **device enum** — a two-character hex value (e.g. `10`, `11`, `1A`) that identifies the device on the radio bus.
