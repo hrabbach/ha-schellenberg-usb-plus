@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 
-import serial_asyncio
+import serial_asyncio_fast as serial_asyncio
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 

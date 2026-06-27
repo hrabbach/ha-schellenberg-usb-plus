@@ -75,7 +75,7 @@ async def test_api_connect_success(hass: HomeAssistant) -> None:
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
 
     with patch(
-        "serial_asyncio.create_serial_connection", new_callable=AsyncMock
+        "serial_asyncio_fast.create_serial_connection", new_callable=AsyncMock
     ) as mock_create:
         mock_transport = MagicMock()
         mock_protocol = MagicMock()
@@ -94,7 +94,7 @@ async def test_api_connect_already_connecting(hass: HomeAssistant) -> None:
     api._is_connecting = True
 
     with patch(
-        "serial_asyncio.create_serial_connection", new_callable=AsyncMock
+        "serial_asyncio_fast.create_serial_connection", new_callable=AsyncMock
     ) as mock_create:
         await api.connect()
 
@@ -153,7 +153,7 @@ async def test_api_send_command_not_connected(hass: HomeAssistant) -> None:
     api._is_connected = False
 
     # Should not raise but also not send
-    with patch("serial_asyncio.create_serial_connection", new_callable=AsyncMock):
+    with patch("serial_asyncio_fast.create_serial_connection", new_callable=AsyncMock):
         await api.send_command("test_command")
         # This would not raise an error, but wouldn't send either
 
