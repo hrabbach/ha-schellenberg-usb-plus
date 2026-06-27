@@ -1,13 +1,13 @@
 {
   "domain": "schellenberg_usb",
-  "name": "Schellenberg USB (hrabbach fork)",
+  "name": "Schellenberg USB+",
   "codeowners": ["@hrabbach"],
   "config_flow": true,
-  "documentation": "https://github.com/hrabbach/schellenberg_usb",
+  "documentation": "https://github.com/hrabbach/ha-schellenberg-usb-plus",
   "homeassistant": "2024.11.0",
   "integration_type": "hub",
   "iot_class": "local_push",
-  "issue_tracker": "https://github.com/hrabbach/schellenberg_usb/issues",
+  "issue_tracker": "https://github.com/hrabbach/ha-schellenberg-usb-plus/issues",
   "requirements": ["pyserial-asyncio-fast==0.16"],
   "usb": [
     {
@@ -16,5 +16,5 @@
       "manufacturer": "van ooijen"
     }
   ],
-  "version": "1.3.3"
+  "version": "1.0.0"
 }
