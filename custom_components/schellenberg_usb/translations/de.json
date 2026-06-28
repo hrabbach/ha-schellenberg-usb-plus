@@ -4,8 +4,7 @@
       "menu": {
         "title": "Schellenberg USB Einrichtung",
         "menu_options": {
-          "user": "USB-Hub einrichten",
-          "pair_device_menu": "Neues Gerät koppeln"
+          "user": "USB-Hub einrichten"
         }
       },
       "user": {

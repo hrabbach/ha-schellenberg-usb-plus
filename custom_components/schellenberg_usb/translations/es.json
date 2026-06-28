@@ -4,8 +4,7 @@
       "menu": {
         "title": "Configuración de Schellenberg USB",
         "menu_options": {
-          "user": "Configurar hub USB",
-          "pair_device_menu": "Emparejar nuevo dispositivo"
+          "user": "Configurar hub USB"
         }
       },
       "user": {
