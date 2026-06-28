@@ -227,6 +227,20 @@ The integration tracks position by dead-reckoning — it uses the calibrated ope
 
 ---
 
+## Entities Exposed
+
+Each paired blind motor creates one **cover** entity. The USB stick itself creates a set of diagnostic entities grouped under the "Schellenberg USB Stick" device:
+
+| Platform | Entity | Description |
+|----------|--------|-------------|
+| `cover` | Blind (one per paired motor) | Open, close, stop, and set position (0–100 %). Position tracking requires calibration. |
+| `sensor` | Connection Status | Whether the USB stick is currently connected (`Connected` / `Disconnected`). |
+| `sensor` | Firmware Version | Firmware version string reported by the stick. |
+| `sensor` | Operating Mode | Current stick mode (e.g. `Listening`, `Pairing`). |
+| `switch` | LED | Toggles the status LED on the USB stick on or off. State is restored across HA restarts. |
+
+---
+
 ## Contributing
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup and the local quality gate (tests, lint, type-check, and spell-check) every change must pass.

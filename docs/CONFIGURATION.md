@@ -53,7 +53,7 @@ Each paired blind motor is a **subentry** under the hub. Subentries are added vi
 
 | Field | Key | Type | Required | Default | Description |
 |-------|-----|------|----------|---------|-------------|
-| Device enumerator | `device_enum` | 2-char hex string | Yes | — | Hex enumerator assigned to this motor (e.g. `10`, `11`). Must be unique across all blind subentries. Range: `00`–`FF`. |
+| Device enumerator | `device_enum` | 2-char hex string | Yes | — | Hex enumerator assigned to this motor (e.g. `10`, `11`). Must be unique across all blind subentries. Range: `00`–`FF`. Stored as uppercase. |
 | Bidirectional | `bidirectional` | boolean | Yes | `true` | `true` = motor reports movement events back (event-based position tracking). `false` = timed/non-bidirectional motor (position computed from calibration times only). |
 | Friendly name | `device_name` | string | No | `Blind {device_enum}` | Display name shown in HA. Falls back to `Blind {enum}` if left blank. |
 
@@ -69,7 +69,7 @@ All per-device values are persisted in `subentry.data`:
 
 | Key | Constant | Description |
 |-----|----------|-------------|
-| `device_id` | `CONF_DEVICE_ID` | Device identifier string |
+| `device_id` | `CONF_DEVICE_ID` | Device identifier string (equals `device_enum` for manually-added devices) |
 | `device_enum` | — | 2-char uppercase hex enumerator |
 | `bidirectional` | `CONF_BIDIRECTIONAL` | Motor mode flag |
 | `initial_position` | `CONF_INITIAL_POSITION` | Seed position (timed motors only) |
@@ -87,7 +87,7 @@ The integration routes to one of two calibration flows based on the motor's `bid
 Used for motors that report movement events back to the stick.
 
 - The flow listens for `EVENT_STARTED_MOVING_UP` / `EVENT_STARTED_MOVING_DOWN` and `EVENT_STOPPED` dispatcher signals.
-- Timing is measured with `time.time()`.
+- Timing is measured with `time.monotonic()`.
 - Flow timeout: `CALIBRATION_TIMEOUT = 300` seconds (5 minutes) per movement phase.
 - Calibration data is saved to the HA Store and a `SIGNAL_CALIBRATION_COMPLETED` signal is emitted with `final_position=0` (flow ends on a close run).
 
@@ -149,8 +149,8 @@ Source: `manifest.json`
 | Field | Value |
 |-------|-------|
 | Domain | `schellenberg_usb` |
-| Version | `1.3.0` |
+| Version | `1.0.0` |
 | Integration type | `hub` |
 | IoT class | `local_push` |
-| Requirement | `pyserial-asyncio==0.6` |
+| Requirement | `pyserial-asyncio-fast==0.16` |
 | Config flow | Yes |

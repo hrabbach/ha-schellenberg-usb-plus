@@ -78,3 +78,45 @@ such constraint and run natively for speed.
 - Use conventional-commit prefixes (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`,
   `test:`, `style:`).
 - Run the full quality gate before pushing.
+
+## Code Style
+
+All style rules are configured in `pyproject.toml`:
+
+- **Formatter / linter:** `ruff` — max line length 80, `ruff-format` for formatting.
+- **Type checker:** `mypy` (Python 3.13 strict-ish mode, `follow_imports = "silent"`).
+- **Spell checker:** `codespell` — domain-specific ignore list in `[tool.codespell]`; add
+  legitimate terms there rather than using `# noqa`.
+
+Run the commands from the [Quality Gate](#quality-gate) section. There is no pre-commit hook,
+so you must run them manually.
+
+## Pull Request Process
+
+The repository lives at **https://github.com/hrabbach/ha-schellenberg-usb-plus**.
+
+1. **Fork** the repository and create a feature branch from `main`:
+   `git checkout -b feat/my-change`
+2. Make your changes and run the full quality gate (all four checks must pass).
+3. Open a pull request against `main` on GitHub.
+4. Include in the PR description:
+   - What the change does and why.
+   - Which quality-gate checks you ran and that they passed.
+   - Any manual testing performed (hardware UAT is noted as post-merge for hardware-dependent
+     changes).
+5. PRs should contain **code only** — do not include `.planning/` or `.claude/` directories
+   (these are local-only and blocked by the repo's pre-push hook).
+6. A maintainer will review and merge with a merge commit once checks pass.
+
+## Reporting Issues
+
+File bugs and feature requests at:
+**https://github.com/hrabbach/ha-schellenberg-usb-plus/issues**
+
+When reporting a bug, include:
+
+- Home Assistant version.
+- Integration version (from **Settings → Devices & Services → Schellenberg USB**).
+- Steps to reproduce, expected behaviour, and actual behaviour.
+- Relevant log output (enable debug logging for `custom_components.schellenberg_usb` if
+  possible).

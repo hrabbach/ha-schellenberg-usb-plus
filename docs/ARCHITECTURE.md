@@ -79,13 +79,14 @@ SchellenbergUsbConfigFlow (config_flow.py)
 | `__init__.py` | `async_setup_entry` | Creates `SchellenbergUsbApi`, stores it in `entry.runtime_data`, bootstraps hub subentry, forwards to platforms, registers `_on_entry_updated` to detect subentry changes |
 | `cover.py` | `SchellenbergCover` | HA `CoverEntity` + `RestoreEntity`; open/close/stop/set-position; position tracking loop (200 ms tick, 1 s HA push); bidirectional vs timed branching; calibration persistence |
 | `cover.py` | `_get_cal_store` / `_save_calibration` | HA `Store` wrapper for `.storage/schellenberg_usb_calibration`; shared across all cover entities via `hass.data` |
-| `sensor.py` | `SchellenbergConnectionSensor` / `SchellenbergVersionSensor` / `SchellenbergModeSensor` | Expose `api.is_connected`, `api.device_version`, `api.device_mode`; update on `SIGNAL_STICK_STATUS_UPDATED` |
+| `sensor.py` | `SchellenbergBaseSensor` / `SchellenbergConnectionSensor` / `SchellenbergVersionSensor` / `SchellenbergModeSensor` | Expose `api.is_connected`, `api.device_version`, `api.device_mode`; update on `SIGNAL_STICK_STATUS_UPDATED` |
 | `switch.py` | `SchellenbergLedSwitch` | LED on/off/blink by delegating to `api.led_on()` / `api.led_off()` |
 | `config_flow.py` | `SchellenbergUsbConfigFlow` | Hub config flow: manual serial port entry + USB auto-discovery |
 | `config_flow.py` | `SchellenbergPairingSubentryFlow` | Subentry flow for blind devices; delegates calibration steps to handler classes |
 | `options_flow.py` | `SchellenbergOptionsFlowHandler` | Hub options: change serial port, toggle `ignore_unknown`; port change triggers reload, toggle is live-applied without reload |
 | `options_flow_calibration.py` | `CalibrationFlowHandler` | Event-driven calibration for bidirectional motors: waits for `SIGNAL_DEVICE_EVENT_{id}` start/stop events; emits `SIGNAL_CALIBRATION_COMPLETED` with `final_position=0` |
 | `options_flow_timed_calibration.py` | `TimedCalibrationFlowHandler` | Button-press timing calibration for non-bidirectional motors: sends drive command, user presses a form button when motor reaches endstop, records `time.monotonic()` delta; emits `SIGNAL_CALIBRATION_COMPLETED` with `final_position=100` |
+| `options_flow_pairing.py` | `PairingFlowHandler` | Legacy class, currently unreachable in the UI path; retained only because `CalibrationFlowHandler` references `get_last_paired_device_id()` via `getattr()` fallback |
 | `const.py` | constants | `DOMAIN`, `CMD_*`, `CONF_*`, `SIGNAL_*` strings, `SchellenbergConfigEntry` type alias, calibration guard constants |
 
 ---
@@ -97,14 +98,15 @@ SchellenbergUsbConfigFlow (config_flow.py)
 - **Baud rate:** 112500 bps (fixed; not configurable)
 - **USB device:** VID 16C0, PID 05E1, manufacturer "van ooijen" (Schellenberg USB Funk-Stick)
 - **Framing:** newline-terminated ASCII lines
+- **Serial library:** `pyserial-asyncio-fast==0.16` (imported as `serial_asyncio_fast`)
 
 ### Connection lifecycle (`api.py:SchellenbergUsbApi.connect`)
 
-1. `serial_asyncio.create_serial_connection` creates a `SchellenbergProtocol` instance.
+1. `serial_asyncio_fast.create_serial_connection` creates a `SchellenbergProtocol` instance.
 2. `verify_device()` sends `!?` (`CMD_VERIFY`) and awaits an `RFTU_V*` response via `_verify_future` (timeout: `VERIFY_TIMEOUT` = 5 s).
 3. If mode is not `listening`, a lowercase command (`hello`) is sent to enter listening mode (B:2).
 4. `get_device_id()` sends `sr` (`CMD_GET_DEVICE_ID`) and awaits an `sr{6-char-id}` response via `_device_id_future`.
-5. On `SerialException`/`OSError`, retry is scheduled via `hass.loop.call_later(5, ...)`.
+5. On `SerialException`/`OSError`, retry is scheduled via `asyncio.get_running_loop().call_later(5, ...)`.
 
 ### Message parsing (`api.py:SchellenbergUsbApi._handle_message`)
 
@@ -114,8 +116,8 @@ SchellenbergUsbConfigFlow (config_flow.py)
 | `t1` / `t0` | — | Transmit ACK; ignored |
 | `tE` | — | Stick busy; schedules `_retry_command_after_delay()` (100 ms) to resend `_pending_retry_command` |
 | `sr{6}` | `sr5D3E7C` | Device ID response; resolves `_device_id_future` |
-| `sl{...}` | `sl00BE{6-char-id}...` | Pairing/list response; device ID extracted at `[6:12]`; resolves `_pairing_future` during pairing |
-| `ss{...}` | `ss{enum:2}{device_id:6}{incr:4}{cmd:2}{pad:2}{rssi:2}` | Inbound device event; device enum at `[2:4]`, device ID at `[4:10]`, command at `[14:16]`; dispatches `SIGNAL_DEVICE_EVENT_{device_id}` |
+| `sl{...}` | `sl00BE{6-char-id}...` | Pairing/list response; device ID extracted at `[6:12]` (requires `len >= 12`); resolves `_pairing_future` during pairing |
+| `ss{...}` | `ss{enum:2}{device_id:6}{incr:4}{cmd:2}{pad:2}{rssi:2}` | Inbound device event (requires `len >= 18`); device enum at `[2:4]`, device ID at `[4:10]`, command at `[14:16]`; dispatches `SIGNAL_DEVICE_EVENT_{device_id}` |
 
 ### Outbound command format
 
@@ -127,7 +129,7 @@ ss{device_enum:2}{repeat:1}{command:2}{padding:4}
 
 Example — open blind with enum `10`:
 ```
-ss109010000
+ss10901000 0
 ```
 
 Literal command values (from `const.py`):
@@ -144,7 +146,7 @@ Literal command values (from `const.py`):
 | `CMD_MANUAL_UP` | `41` | Hold-up (button simulation) |
 | `CMD_MANUAL_DOWN` | `42` | Hold-down (button simulation) |
 
-Stick system commands are uppercase with `!` prefix: `!?` (verify), `!B` (bootloader), `!G` (initial), `!R` (reboot). Lowercase commands control the stick itself: `so+`/`so-` (LED on/off), `so1`–`so9` (LED blink), `sr` (get device ID), `sp` (enter pairing mode).
+Stick system commands are uppercase with `!` prefix: `!?` (verify), `!B` (bootloader), `!G` (initial), `!R` (reboot). Lowercase commands control the stick itself: `so+`/`so-` (LED on/off), `so1`–`so9` (LED blink), `sr` (get device ID), `sp` (enter/exit pairing mode).
 
 ---
 
@@ -186,7 +188,7 @@ without the key are treated as bidirectional.
   `_attr_is_closing`, start the position-tracking loop, and snap position on stop.
 - Calibration uses `CalibrationFlowHandler`, which subscribes to
   `SIGNAL_DEVICE_EVENT_{device_id}` to detect movement start and stop events, then
-  measures elapsed `time.time()` between them.
+  measures elapsed `time.monotonic()` between them.
 - `set_cover_position` is always available.
 
 ### Timed (non-bidirectional) motors
@@ -252,9 +254,11 @@ Calibration data (open and close travel times in seconds) is stored in
   the legacy `schellenberg_usb_devices` Store and then dispatches
   `SIGNAL_CALIBRATION_COMPLETED`. The cover's `_handle_calibration_completed`
   callback calls `_save_calibration` to also write to the calibration Store.
-- **Timed path:** `TimedCalibrationFlowHandler._emit_calibration_signal` dispatches
-  `SIGNAL_CALIBRATION_COMPLETED` directly. The cover callback writes to the
-  calibration Store.
+- **Timed path:** `TimedCalibrationFlowHandler._emit_calibration_signal` first
+  `await`s `_save_calibration` (imported lazily from `cover.py`) to persist calibration
+  to the Store synchronously, then dispatches `SIGNAL_CALIBRATION_COMPLETED`. This
+  ensures the reload triggered by the flow abort sees calibrated times rather than the
+  60 s default.
 
 Both paths pass `(device_id, open_time, close_time, final_position)` on the signal.
 `final_position=0` for the bidirectional flow (ends on a close run);
@@ -278,7 +282,7 @@ report movement events. It is entered via `async_step_reconfigure` when
 3. `timed_cal_open` — Sends `CMD_UP`, records start time, shows a form. On next submit,
    records elapsed open time with the same guards.
 4. `timed_cal_confirm` — Shows measured times. User may confirm or redo. On confirm,
-   emits `SIGNAL_CALIBRATION_COMPLETED` with `final_position=100`.
+   awaits `_save_calibration` then emits `SIGNAL_CALIBRATION_COMPLETED` with `final_position=100`.
 
 No `CMD_STOP` is ever issued by this handler — motors run to their physical endstops.
 `time.monotonic()` is captured before each `await` to avoid inflating timing with
@@ -313,13 +317,13 @@ via `_SETUP_CALLBACKS[entry_id]["subentry_ids"]` and reloads the config entry.
 
 ## Key Constraints and Anti-Patterns
 
-### Serial port sanity check is blocking
+### Serial port sanity check via executor
 
-`config_flow.py` and `options_flow.py` open the serial port with the blocking
-`serial.Serial(port)` call to validate connectivity before creating/updating the
-entry. This is intentional (documented with `# NOTE: blocking open used only to
-sanity-check connectivity`) but means the HA event loop is briefly blocked during
-flow validation.
+`config_flow.py` and `options_flow.py` validate the serial port by opening it with
+the blocking `serial.Serial(port)` call, dispatched to the executor via
+`hass.async_add_executor_job()` to avoid blocking the HA event loop. This is
+intentional (documented in both files with `# NOTE: blocking open used only to
+sanity-check connectivity`) and safe because it runs off-loop.
 
 ### Device enumerators are allocated sequentially
 
@@ -330,14 +334,21 @@ highest existing hex enum and adds 1. Enumerators start at `PAIRING_DEVICE_ENUM_
 ### Stick-busy retry
 
 When the stick responds `tE`, the last command is stored in `_pending_retry_command`
-and re-sent after 100 ms. Only one pending retry exists at a time; a new `tE` cancels
-any in-flight retry task before scheduling a fresh one.
+and re-sent after 100 ms (`asyncio.sleep(0.1)`). Only one pending retry exists at a
+time; a new `tE` cancels any in-flight retry task before scheduling a fresh one.
 
 ### Ignore unknown signals
 
 The `CONF_IGNORE_UNKNOWN` hub option demotes log lines for unknown device IDs from
 `WARNING` to `DEBUG`. It is live-applied to `api.ignore_unknown` without a reload
 when the port path is unchanged.
+
+### Legacy pairing handler
+
+`options_flow_pairing.py:PairingFlowHandler` is currently unreachable in the active
+UI path. The live flow is `SchellenbergPairingSubentryFlow` in `config_flow.py`. The
+file is retained only because `CalibrationFlowHandler` references
+`get_last_paired_device_id()` via `getattr()` fallback.
 
 ---
 
@@ -350,12 +361,12 @@ custom_components/schellenberg_usb/
 ├── config_flow.py                 — hub config + blind subentry flows
 ├── const.py                       — DOMAIN, CMD_*, CONF_*, SIGNAL_*, type aliases
 ├── cover.py                       — SchellenbergCover entity + calibration store helpers
+├── manifest.json                  — integration metadata, pyserial-asyncio-fast dependency
 ├── options_flow.py                — hub options (serial port, ignore_unknown toggle)
 ├── options_flow_calibration.py    — event-driven calibration (bidirectional motors)
-├── options_flow_pairing.py        — PairingFlowHandler (legacy options-flow helper)
+├── options_flow_pairing.py        — PairingFlowHandler (legacy, currently unreachable)
 ├── options_flow_timed_calibration.py — button-press timing calibration (timed motors)
 ├── sensor.py                      — USB stick status sensors
 ├── switch.py                      — LED switch entity
-├── manifest.json                  — integration metadata, pyserial-asyncio dependency
 └── strings.json / translations/   — UI strings for config/options flows
 ```
