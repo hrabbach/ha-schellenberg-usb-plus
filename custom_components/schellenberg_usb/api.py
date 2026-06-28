@@ -364,6 +364,10 @@ class SchellenbergUsbApi:
         Returns a tuple of (device_id, device_enum) if successful, None if timeout.
         """
         if self._pairing_future and not self._pairing_future.done():
+            # Architecturally impossible: HA runs one subentry flow at a time, so two
+            # concurrent calls cannot happen in practice. The None return here would cause
+            # config_flow to abort with "pairing_timeout", which is misleading. Document
+            # rather than raise a distinct exception — the guard is a safety net only.
             _LOGGER.warning("Pairing already in progress")
             return None
 
