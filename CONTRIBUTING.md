@@ -108,6 +108,20 @@ The repository lives at **https://github.com/hrabbach/ha-schellenberg-usb-plus**
    (these are local-only and blocked by the repo's pre-push hook).
 6. A maintainer will review and merge with a merge commit once checks pass.
 
+## Changelog
+
+This project keeps a [Keep a Changelog](https://keepachangelog.com/)-style `CHANGELOG.md`.
+
+- If your PR makes a **user-facing change** — a new feature, a bug fix, or a change in
+  behaviour a user or installer would notice — add a one-line entry under the matching
+  `### Added` / `### Changed` / `### Fixed` / `### Removed` heading inside the
+  `## [Unreleased]` section (create the heading if it is not there yet).
+- **Docs-only, tests, CI, and pure refactors get no entry** — leave `[Unreleased]` empty
+  for those.
+- You do not version your entry. At release time the maintainer promotes `[Unreleased]`
+  to the new version (see the shipping process); contributors only ever edit
+  `[Unreleased]`.
+
 ## Reporting Issues
 
 File bugs and feature requests at:

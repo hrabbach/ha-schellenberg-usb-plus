@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+<!--
+  Add an entry here for every user-facing change as it merges, under the right heading.
+  Only user-facing changes belong here (features, fixes, behaviour changes a user or
+  installer would notice). Docs-only, tests, CI, and pure refactors get NO entry.
+  At release time the maintainer renames this section to the new version (see below).
+
+  ### Added       — new features
+  ### Changed      — changes to existing behaviour
+  ### Fixed        — bug fixes
+  ### Removed       — removed features
+-->
+
 ## [1.0.0] - 2026-06-27
 
 ### Added
