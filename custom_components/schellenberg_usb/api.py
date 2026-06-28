@@ -797,6 +797,11 @@ class SchellenbergUsbApi:
             self._retry_task.cancel()
             self._retry_task = None
 
+        # Cancel any pending stop-pairing task (survives transport close otherwise)
+        if self._stop_pairing_task and not self._stop_pairing_task.done():
+            self._stop_pairing_task.cancel()
+            self._stop_pairing_task = None
+
         if self._transport:
             self._transport.close()
             self._transport = None
