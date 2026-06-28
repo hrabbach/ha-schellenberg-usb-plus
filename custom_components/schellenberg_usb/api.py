@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from typing import Any
 
 import serial_asyncio_fast as serial_asyncio
 from homeassistant.core import HomeAssistant, callback
@@ -40,6 +41,8 @@ from .const import (
     CMD_TRANSMIT,
     CMD_UP,
     CMD_VERIFY,
+    DEVICE_ID_TIMEOUT,
+    MAX_DEVICE_ENUM,
     PAIRING_DEVICE_ENUM_START,
     PAIRING_TIMEOUT,
     SIGNAL_DEVICE_EVENT,
@@ -48,6 +51,10 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class DeviceLimitReached(Exception):
+    """Raised when all device enum slots (0x10–0xFF) are occupied."""
 
 
 class SchellenbergUsbApi:
@@ -188,8 +195,7 @@ class SchellenbergUsbApi:
                     self._device_version,
                     self._device_mode,
                 )
-                if self._verify_future and not self._verify_future.done():
-                    self._verify_future.set_result(True)
+                self._safe_resolve_future(self._verify_future, True)
                 self._update_status()
             return
 
@@ -213,8 +219,7 @@ class SchellenbergUsbApi:
         if message.startswith("sr") and len(message) >= 8:
             device_id = message[2:8]
             _LOGGER.debug("Received device ID response: %s", device_id)
-            if self._device_id_future and not self._device_id_future.done():
-                self._device_id_future.set_result(device_id)
+            self._safe_resolve_future(self._device_id_future, device_id)
             return
 
         # Handle pairing/list responses (format: sl00BEXXXXXX...)
@@ -243,7 +248,7 @@ class SchellenbergUsbApi:
             # because the user is explicitly trying to pair RIGHT NOW
             if self._pairing_future and not self._pairing_future.done():
                 _LOGGER.info("Pairing successful! New device ID: %s", device_id)
-                self._pairing_future.set_result(device_id)
+                self._safe_resolve_future(self._pairing_future, device_id)
                 # Stop pairing mode after a 2 second delay to ensure device has fully paired
                 self._stop_pairing_task = asyncio.create_task(
                     self._stop_pairing_mode(delay=True)
@@ -279,7 +284,7 @@ class SchellenbergUsbApi:
                 if self._pairing_future and not self._pairing_future.done():
                     if device_id not in self._registered_devices:
                         _LOGGER.info("Pairing successful! New device ID: %s", device_id)
-                        self._pairing_future.set_result(device_id)
+                        self._safe_resolve_future(self._pairing_future, device_id)
                         # Stop pairing mode after a 2 second delay to ensure device has fully paired
                         self._stop_pairing_task = asyncio.create_task(
                             self._stop_pairing_mode(delay=True)
@@ -359,11 +364,21 @@ class SchellenbergUsbApi:
         Returns a tuple of (device_id, device_enum) if successful, None if timeout.
         """
         if self._pairing_future and not self._pairing_future.done():
+            # Architecturally impossible: HA runs one subentry flow at a time, so two
+            # concurrent calls cannot happen in practice. The None return here would cause
+            # config_flow to abort with "pairing_timeout", which is misleading. Document
+            # rather than raise a distinct exception — the guard is a safety net only.
             _LOGGER.warning("Pairing already in progress")
             return None
 
         # Get the next available device enumerator
         device_enum = self.initialize_next_device_enum()
+
+        # Raise before formatting pair_command (so "ssNone9..." is never built)
+        # and before create_future() (so no dangling future is left) — D-02.
+        if device_enum is None:
+            _LOGGER.warning("Device enum limit reached - cannot pair new device")
+            raise DeviceLimitReached
 
         # Format: ssXX9CCPPPP
         # ss = transmit prefix
@@ -402,6 +417,9 @@ class SchellenbergUsbApi:
         except TimeoutError:
             _LOGGER.warning("Pairing timeout - no device responded with ID")
             return None
+        except ConnectionError:
+            _LOGGER.warning("Pairing aborted - serial port disconnected")
+            return None
         else:
             # Pairing successful - return the device ID and enum
             _LOGGER.info(
@@ -426,7 +444,12 @@ class SchellenbergUsbApi:
             _LOGGER.debug("Stopping pairing mode with command: sp")
             await self.send_command(CMD_GET_PARAM_P)
             _LOGGER.info("Pairing mode stopped")
+        except asyncio.CancelledError:
+            _LOGGER.debug("Stop-pairing task cancelled during teardown")
+            raise  # always re-raise CancelledError so the task terminates cleanly
         except OSError as err:
+            # send_command may raise OSError if the transport was closed; this is
+            # expected during teardown when disconnect() races with the delay sleep.
             _LOGGER.debug("Error stopping pairing mode (communication error): %s", err)
 
     async def control_blind(self, device_enum: str, action: str) -> None:
@@ -447,46 +470,48 @@ class SchellenbergUsbApi:
         _LOGGER.debug("Sending blind control: %s", command)
         await self.send_command(command)
 
-    def initialize_next_device_enum(self) -> str:
+    def initialize_next_device_enum(self) -> str | None:
         """Get the next available device enum based on registered devices.
 
-        Returns the next available device enumerator as a hex string (e.g., "10").
+        Returns the lowest free device enumerator as a hex string (e.g., "10"),
+        or None when all slots 0x10–0xFF are occupied (no wraparound).
 
-        This is a stateless method that computes the next available enum
-        by finding the highest enum in registered devices and returning one higher.
+        Reclaims slots freed by removed devices instead of burning enums
+        over add/remove cycles (D-01/D-02).
         """
-        if not self._registered_devices:
-            _LOGGER.debug(
-                "No registered devices found, starting enum at %s",
-                f"{PAIRING_DEVICE_ENUM_START:02X}",
-            )
-            return f"{PAIRING_DEVICE_ENUM_START:02X}"
-
-        # Find the highest enum value from registered devices
-        max_enum = PAIRING_DEVICE_ENUM_START - 1
+        # Build the set of currently-used enum values (skip malformed entries)
+        used: set[int] = set()
         for device_enum in self._registered_devices.values():
             try:
-                enum_value = int(device_enum, 16)
-                max_enum = max(max_enum, enum_value)
-            except (ValueError, TypeError) as err:
-                _LOGGER.warning("Invalid enum value for device: %s", err)
+                used.add(int(device_enum, 16))
+            except (ValueError, TypeError):
+                pass  # malformed enum: skip silently
 
-        # Next enum is 1 higher than the highest
-        next_enum = max_enum + 1
-        if next_enum > 0xFF:
-            next_enum = PAIRING_DEVICE_ENUM_START
-            _LOGGER.warning(
-                "Next enum exceeded 0xFF, wrapping back to %s",
-                f"{PAIRING_DEVICE_ENUM_START:02X}",
-            )
+        # Scan for the lowest free slot in the valid range
+        for slot in range(PAIRING_DEVICE_ENUM_START, MAX_DEVICE_ENUM + 1):
+            if slot not in used:
+                result = f"{slot:02X}"
+                # If the chosen slot is below the current high-water mark,
+                # it is a reclaimed gap from a previously-removed device.
+                # Emit an operator hint so they can factory-reset any still-
+                # powered motor on that slot (T-07-05 partial mitigation).
+                if used and slot < max(used):
+                    _LOGGER.info(
+                        "Reclaiming previously-used device enum %s"
+                        " - if the old motor on this slot is still powered,"
+                        " factory-reset it to avoid stale status frames",
+                        result,
+                    )
+                _LOGGER.debug("Next device enum: %s", result)
+                return result
 
-        result = f"{next_enum:02X}"
-        _LOGGER.debug(
-            "Computed next device enum as %s (highest existing: %s)",
-            result,
-            f"{max_enum:02X}",
+        # All 240 slots are occupied — surface the limit, do not wrap
+        _LOGGER.warning(
+            "Device enum limit reached: all slots %02X-%02X are occupied",
+            PAIRING_DEVICE_ENUM_START,
+            MAX_DEVICE_ENUM,
         )
-        return result
+        return None
 
     def register_existing_devices(self, devices: list[dict]) -> None:
         """Register existing devices from storage.
@@ -539,11 +564,33 @@ class SchellenbergUsbApi:
         except TimeoutError:
             _LOGGER.error("Device verification timeout - device did not respond to !?")
             return False
+        except ConnectionError:
+            _LOGGER.warning("Device verification aborted - serial port disconnected")
+            return False
         else:
             _LOGGER.info("Device verification successful")
             return result
         finally:
             self._verify_future = None
+
+    def _safe_resolve_future(
+        self,
+        future: asyncio.Future[Any] | None,
+        result: Any = None,
+        *,
+        exception: BaseException | None = None,
+    ) -> None:
+        """Resolve a future safely, ignoring already-done futures.
+
+        Guards against asyncio.InvalidStateError from double-resolution
+        (e.g. a late serial frame landing in the same tick as a disconnect).
+        """
+        if future is None or future.done():
+            return
+        if exception is not None:
+            future.set_exception(exception)
+        else:
+            future.set_result(result)
 
     @callback
     def _update_status(self) -> None:
@@ -553,6 +600,13 @@ class SchellenbergUsbApi:
     def update_connection_status(self, connected: bool) -> None:
         """Update connection status (called from protocol)."""
         self._is_connected = connected
+        if not connected:
+            # Fail all pending futures immediately so suspended flows return
+            # within seconds instead of hanging for the full timeout (D-10).
+            err = ConnectionError("Serial port disconnected")
+            self._safe_resolve_future(self._pairing_future, exception=err)
+            self._safe_resolve_future(self._verify_future, exception=err)
+            self._safe_resolve_future(self._device_id_future, exception=err)
         self._update_status()
 
     @property
@@ -706,9 +760,14 @@ class SchellenbergUsbApi:
             await self.send_command(CMD_GET_DEVICE_ID)
 
             # Wait for device ID response with timeout
-            device_id = await asyncio.wait_for(self._device_id_future, timeout=5)
+            device_id = await asyncio.wait_for(
+                self._device_id_future, timeout=DEVICE_ID_TIMEOUT
+            )
         except TimeoutError:
             _LOGGER.error("Device ID request timeout - device did not respond")
+            return None
+        except ConnectionError:
+            _LOGGER.warning("Device ID request aborted - serial port disconnected")
             return None
         else:
             _LOGGER.info("Device ID retrieved successfully: %s", device_id)
@@ -747,6 +806,11 @@ class SchellenbergUsbApi:
         if self._retry_task and not self._retry_task.done():
             self._retry_task.cancel()
             self._retry_task = None
+
+        # Cancel any pending stop-pairing task (survives transport close otherwise)
+        if self._stop_pairing_task and not self._stop_pairing_task.done():
+            self._stop_pairing_task.cancel()
+            self._stop_pairing_task = None
 
         if self._transport:
             self._transport.close()

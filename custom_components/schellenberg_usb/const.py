@@ -99,6 +99,10 @@ VERIFY_TIMEOUT = 5  # seconds to wait for verification response
 # Pairing constants
 PAIRING_TIMEOUT = 120  # seconds to wait for pairing response
 PAIRING_DEVICE_ENUM_START = 0x10  # Start from 0x10 for new devices
+# Usable device enum slots: PAIRING_DEVICE_ENUM_START (0x10) through
+# MAX_DEVICE_ENUM (0xFF) inclusive = 240 concurrent device slots.
+MAX_DEVICE_ENUM = 0xFF  # Inclusive upper bound for device enumerators
+DEVICE_ID_TIMEOUT = 5  # seconds to wait for device-id response
 
 # Calibration constants
 CALIBRATION_TIMEOUT = 300  # Maximum 5 minutes (300 seconds) for calibration

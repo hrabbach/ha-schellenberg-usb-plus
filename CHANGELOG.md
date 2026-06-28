@@ -19,6 +19,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   ### Removed       — removed features
 -->
 
+### Added
+
+- Device pairing now assigns the lowest free address slot and shows a clear "device limit reached" error when every slot is in use, so re-pairing can no longer silently overwrite an existing motor.
+
+### Fixed
+
+- Pairing, device verification, and device-ID lookups now fail fast if the USB stick disconnects mid-operation, instead of hanging until the timeout.
+- A late radio frame arriving as the stick disconnects no longer causes an internal error.
+- A pairing task could keep running after the stick disconnected; it is now cancelled cleanly.
+- Completed the German, Spanish, and French translations for the manual device-add errors and the timed-calibration screens (previously shown in English or as raw text keys).
+
 ## [1.0.0] - 2026-06-27
 
 ### Added

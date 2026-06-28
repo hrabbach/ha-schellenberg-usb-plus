@@ -4,8 +4,7 @@
       "menu": {
         "title": "Schellenberg USB Einrichtung",
         "menu_options": {
-          "user": "USB-Hub einrichten",
-          "pair_device_menu": "Neues Gerät koppeln"
+          "user": "USB-Hub einrichten"
         }
       },
       "user": {
@@ -49,6 +48,22 @@
             "manual_add": "Manuell hinzufügen (bereits gekoppelt)"
           }
         },
+        "manual_add": {
+          "title": "Rollladen per Sendeadresse hinzufügen",
+          "description": "Geben Sie die 2-stellige hexadezimale Sendeadresse (Enum-Slot) ein, auf die der Motor bereits hört. Beispiel: 10, 1A, 2B.",
+          "data": {
+            "device_enum": "Sendeadresse (hex)",
+            "bidirectional": "Bidirektionaler Motor",
+            "device_name": "Anzeigename (optional)"
+          }
+        },
+        "manual_position": {
+          "title": "Startposition festlegen",
+          "description": "Wo befindet sich {device_name} gerade? Dies legt die Startposition für den Positionsregler fest. Hinweis: Die Positionierung für zeitgesteuerte Motoren verwendet eine Standard-Fahrzeit und ist erst nach der Kalibrierung genau.",
+          "data": {
+            "initial_position": "Aktuelle Position"
+          }
+        },
         "pair": {
           "title": "Neues Gerät koppeln",
           "description": "Drücken Sie die Kopplungstaste, um den Kopplungsmodus an Ihrem Schellenberg USB-Stick zu aktivieren. Drücken Sie dann innerhalb von 2 Minuten die Kopplungstaste an Ihrem Rollladenmotor.",
@@ -82,43 +97,46 @@
           "submit": "Fertig"
         },
         "timed_cal_precondition": {
-          "title": "Step 1: Precondition",
-          "description": "Before calibrating {device_name}, make sure the shutter is fully open (at the top). Press Next when the shutter is in the fully open position.",
-          "submit": "Next"
+          "title": "Schritt 1: Vorbedingung",
+          "description": "Stellen Sie vor der Kalibrierung von {device_name} sicher, dass der Rollladen vollständig geöffnet ist (ganz oben). Drücken Sie 'Weiter', wenn sich der Rollladen in der vollständig geöffneten Position befindet.",
+          "submit": "Weiter"
         },
         "timed_cal_close": {
-          "title": "Step 2: Time the closing run",
-          "description": "{device_name} is now closing. Press Submit when the shutter has fully reached the bottom end position.",
-          "submit": "Submit"
+          "title": "Schritt 2: Schließlauf messen",
+          "description": "{device_name} schließt jetzt. Drücken Sie 'Bestätigen', wenn der Rollladen die untere Endposition vollständig erreicht hat.",
+          "submit": "Bestätigen"
         },
         "timed_cal_open": {
-          "title": "Step 3: Time the opening run",
-          "description": "{device_name} is now opening. Press Submit when the shutter has fully reached the top end position.",
-          "submit": "Submit"
+          "title": "Schritt 3: Öffnungslauf messen",
+          "description": "{device_name} öffnet jetzt. Drücken Sie 'Bestätigen', wenn der Rollladen die obere Endposition vollständig erreicht hat.",
+          "submit": "Bestätigen"
         },
         "timed_cal_confirm": {
-          "title": "Confirm calibration",
-          "description": "Calibration for {device_name} measured!\n\nMeasured times:\n- Close time: {close_time} s\n- Open time: {open_time} s\n\nPress Done to save, or check Redo to repeat the measurement. If you redo, first return the shutter to the fully open position via your remote.",
+          "title": "Kalibrierung bestätigen",
+          "description": "Kalibrierung für {device_name} gemessen!\n\nGemessene Zeiten:\n- Schließzeit: {close_time} s\n- Öffnungszeit: {open_time} s\n\nDrücken Sie 'Fertig' zum Speichern oder aktivieren Sie 'Wiederholen', um die Messung zu wiederholen. Führen Sie den Rollladen vor der Wiederholung über Ihre Fernbedienung in die vollständig geöffnete Position.",
           "data": {
-            "redo": "Redo measurement (return shutter to fully open first)"
+            "redo": "Messung wiederholen (Rollladen zuerst vollständig öffnen)"
           },
-          "submit": "Done"
+          "submit": "Fertig"
         }
       },
       "error": {
         "pairing_timeout": "Kein Gerät hat innerhalb von 2 Minuten geantwortet. Bitte versuchen Sie es erneut und stellen Sie sicher, dass Sie die Kopplungstaste an Ihrem Rollladenmotor drücken.",
         "pairing_failed": "Kopplung fehlgeschlagen.",
+        "device_limit_reached": "Gerätelimit erreicht. Dieser Stick kann ca. 240 Motoren ansteuern und alle Slots sind belegt. Entfernen Sie einen nicht mehr genutzten Motor, bevor Sie einen neuen hinzufügen.",
         "calibration_timeout": "Kalibrierung abgelaufen. Der Rollladen hat mehr als 5 Minuten für die Bewegung benötigt. Bitte überprüfen Sie das Gerät und versuchen Sie es erneut.",
         "calibration_start_timeout": "Zeitüberschreitung beim Warten auf die Bewegung des Rollladens. Bitte stellen Sie sicher, dass das Gerät ordnungsgemäß angeschlossen ist, und versuchen Sie es erneut.",
         "unknown": "Ein unerwarteter Fehler ist während der Kalibrierung aufgetreten. Bitte versuchen Sie es erneut.",
-        "timed_cal_too_short": "Run was too short (less than 2 seconds) — likely a double-press or misfire. Please return the shutter to the fully open position via your remote, then try again.",
-        "timed_cal_too_long": "Run exceeded 120 seconds — the shutter may have been left running. Please return the shutter to the fully open position via your remote, then try again within 2 minutes."
+        "invalid_enum_format": "Die Sendeadresse muss genau 2 hexadezimale Zeichen haben (z. B. 10, 1A, 2B).",
+        "duplicate_enum": "Ein Rollladen mit dieser Sendeadresse ist bereits zur Integration hinzugefügt.",
+        "timed_cal_too_short": "Der Lauf war zu kurz (weniger als 2 Sekunden) -- wahrscheinlich eine Doppelbetätigung oder Fehlauslösung. Bitte führen Sie den Rollladen über Ihre Fernbedienung in die vollständig geöffnete Position und versuchen Sie es erneut.",
+        "timed_cal_too_long": "Der Lauf hat 120 Sekunden überschritten -- der Rollladen läuft möglicherweise noch. Bitte führen Sie den Rollladen über Ihre Fernbedienung in die vollständig geöffnete Position und versuchen Sie es innerhalb von 2 Minuten erneut."
       },
       "abort": {
         "pairing_timeout": "Kein Gerät hat innerhalb von 2 Minuten geantwortet. Bitte versuchen Sie es erneut.",
         "pairing_failed": "Kopplung fehlgeschlagen.",
-        "device_not_found": "The selected device could not be found. Please try again.",
-        "timed_cal_incomplete": "Calibration is incomplete — the open and close times were not both measured. Please start the calibration again.",
+        "device_not_found": "Das ausgewählte Gerät konnte nicht gefunden werden. Bitte versuchen Sie es erneut.",
+        "timed_cal_incomplete": "Die Kalibrierung ist unvollständig -- die Öffnungs- und Schließzeiten wurden nicht beide gemessen. Bitte starten Sie die Kalibrierung neu.",
         "reconfigure_successful": "Kalibrierung erfolgreich abgeschlossen"
       }
     }

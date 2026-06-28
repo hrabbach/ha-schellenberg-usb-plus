@@ -4,8 +4,7 @@
       "menu": {
         "title": "Configuration Schellenberg USB",
         "menu_options": {
-          "user": "Configurer le hub USB",
-          "pair_device_menu": "Appairer un nouvel appareil"
+          "user": "Configurer le hub USB"
         }
       },
       "user": {
@@ -49,6 +48,22 @@
             "manual_add": "Ajouter manuellement (déjà appairé)"
           }
         },
+        "manual_add": {
+          "title": "Ajouter un volet par adresse d'émission",
+          "description": "Entrez l'adresse d'émission hexadécimale de 2 caractères (slot enum) à laquelle le moteur répond déjà. Exemple : 10, 1A, 2B.",
+          "data": {
+            "device_enum": "Adresse d'émission (hex)",
+            "bidirectional": "Moteur bidirectionnel",
+            "device_name": "Nom convivial (facultatif)"
+          }
+        },
+        "manual_position": {
+          "title": "Définir la position initiale",
+          "description": "Où se trouve {device_name} en ce moment ? Cela définit la position de départ pour le curseur de position. Remarque : le positionnement pour les moteurs temporisés utilise un temps de déplacement par défaut et n'est pas calibré avant l'étalonnage.",
+          "data": {
+            "initial_position": "Position actuelle"
+          }
+        },
         "pair": {
           "title": "Appairer un nouvel appareil",
           "description": "Appuyez sur le bouton d'appairage pour activer le mode d'appairage sur votre clé USB Schellenberg. Ensuite, appuyez sur le bouton d'appairage de votre moteur de volet dans les 2 minutes.",
@@ -82,43 +97,46 @@
           "submit": "Terminé"
         },
         "timed_cal_precondition": {
-          "title": "Step 1: Precondition",
-          "description": "Before calibrating {device_name}, make sure the shutter is fully open (at the top). Press Next when the shutter is in the fully open position.",
-          "submit": "Next"
+          "title": "Étape 1 : Précondition",
+          "description": "Avant de calibrer {device_name}, assurez-vous que le volet est complètement ouvert (en haut). Appuyez sur Suivant lorsque le volet est en position complètement ouverte.",
+          "submit": "Suivant"
         },
         "timed_cal_close": {
-          "title": "Step 2: Time the closing run",
-          "description": "{device_name} is now closing. Press Submit when the shutter has fully reached the bottom end position.",
-          "submit": "Submit"
+          "title": "Étape 2 : Chronométrer la fermeture",
+          "description": "{device_name} se ferme maintenant. Appuyez sur Soumettre lorsque le volet a complètement atteint la position finale basse.",
+          "submit": "Soumettre"
         },
         "timed_cal_open": {
-          "title": "Step 3: Time the opening run",
-          "description": "{device_name} is now opening. Press Submit when the shutter has fully reached the top end position.",
-          "submit": "Submit"
+          "title": "Étape 3 : Chronométrer l'ouverture",
+          "description": "{device_name} s'ouvre maintenant. Appuyez sur Soumettre lorsque le volet a complètement atteint la position finale haute.",
+          "submit": "Soumettre"
         },
         "timed_cal_confirm": {
-          "title": "Confirm calibration",
-          "description": "Calibration for {device_name} measured!\n\nMeasured times:\n- Close time: {close_time} s\n- Open time: {open_time} s\n\nPress Done to save, or check Redo to repeat the measurement. If you redo, first return the shutter to the fully open position via your remote.",
+          "title": "Confirmer la calibration",
+          "description": "Calibration de {device_name} mesurée !\n\nTemps mesurés :\n- Temps de fermeture : {close_time} s\n- Temps d'ouverture : {open_time} s\n\nAppuyez sur Terminé pour enregistrer, ou cochez Refaire pour répéter la mesure. Si vous recommencez, ramenez d'abord le volet en position complètement ouverte avec votre télécommande.",
           "data": {
-            "redo": "Redo measurement (return shutter to fully open first)"
+            "redo": "Refaire la mesure (ramener le volet en position ouverte d'abord)"
           },
-          "submit": "Done"
+          "submit": "Terminé"
         }
       },
       "error": {
         "pairing_timeout": "Aucun appareil n'a répondu dans les 2 minutes. Veuillez réessayer et vous assurer d'appuyer sur le bouton d'appairage de votre moteur de volet.",
         "pairing_failed": "Échec de l'appairage.",
+        "device_limit_reached": "Limite d'appareils atteinte. Ce stick peut gérer environ 240 moteurs et tous les emplacements sont occupés. Supprimez un moteur inutilisé avant d'en ajouter un nouveau.",
         "calibration_timeout": "Délai de calibration dépassé. Le volet a mis plus de 5 minutes pour terminer le mouvement. Veuillez vérifier l'appareil et réessayer.",
         "calibration_start_timeout": "Délai d'attente dépassé pour le début du mouvement du volet. Veuillez vous assurer que l'appareil est correctement connecté et réessayer.",
         "unknown": "Une erreur inattendue s'est produite pendant la calibration. Veuillez réessayer.",
-        "timed_cal_too_short": "Run was too short (less than 2 seconds) — likely a double-press or misfire. Please return the shutter to the fully open position via your remote, then try again.",
-        "timed_cal_too_long": "Run exceeded 120 seconds — the shutter may have been left running. Please return the shutter to the fully open position via your remote, then try again within 2 minutes."
+        "invalid_enum_format": "L'adresse d'émission doit comporter exactement 2 caractères hexadécimaux (p. ex. 10, 1A, 2B).",
+        "duplicate_enum": "Un volet avec cette adresse d'émission est déjà ajouté à l'intégration.",
+        "timed_cal_too_short": "Le parcours était trop court (moins de 2 secondes) -- probablement une double pression ou un déclenchement accidentel. Ramenez le volet en position complètement ouverte avec votre télécommande, puis réessayez.",
+        "timed_cal_too_long": "Le parcours a dépassé 120 secondes -- le volet est peut-être encore en mouvement. Ramenez le volet en position complètement ouverte avec votre télécommande, puis réessayez dans les 2 minutes."
       },
       "abort": {
         "pairing_timeout": "Aucun appareil n'a répondu dans les 2 minutes. Veuillez réessayer.",
         "pairing_failed": "Échec de l'appairage.",
-        "device_not_found": "The selected device could not be found. Please try again.",
-        "timed_cal_incomplete": "Calibration is incomplete — the open and close times were not both measured. Please start the calibration again.",
+        "device_not_found": "L'appareil sélectionné est introuvable. Veuillez réessayer.",
+        "timed_cal_incomplete": "La calibration est incomplète -- les temps d'ouverture et de fermeture n'ont pas tous deux été mesurés. Veuillez recommencer la calibration.",
         "reconfigure_successful": "Calibration terminée avec succès"
       }
     }
