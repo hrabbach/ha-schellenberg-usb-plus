@@ -228,7 +228,10 @@ async def test_heartbeat_miss_counted_on_timeout(
     would still fire a probe rather than skip.
     """
     api = api_with_transport
-    api._last_traffic_time = 0.0  # stale — definitely outside window
+    # Clock-relative stale: hass.loop.time() is monotonic (time since boot) and may
+    # be < HEARTBEAT_TRAFFIC_WINDOW on a fresh CI runner, so a literal 0.0 is NOT
+    # reliably "stale". Offset from the live clock to guarantee elapsed >= window.
+    api._last_traffic_time = hass.loop.time() - HEARTBEAT_TRAFFIC_WINDOW - 10
 
     with patch.object(
         api, "verify_device", new=AsyncMock(return_value=False)
@@ -270,7 +273,7 @@ async def test_heartbeat_two_misses_mark_disconnected(
     never delays detection.
     """
     api = api_with_transport
-    api._last_traffic_time = 0.0  # stale
+    api._last_traffic_time = hass.loop.time() - HEARTBEAT_TRAFFIC_WINDOW - 10  # clock-relative stale
 
     with patch.object(
         api, "verify_device", new=AsyncMock(return_value=False)
@@ -299,7 +302,7 @@ async def test_heartbeat_single_miss_resets_on_success(
 ) -> None:
     """A miss followed by a successful probe resets miss_count to 0."""
     api = api_with_transport
-    api._last_traffic_time = 0.0  # stale
+    api._last_traffic_time = hass.loop.time() - HEARTBEAT_TRAFFIC_WINDOW - 10  # clock-relative stale
 
     miss_count = 0
     with patch.object(api, "update_connection_status") as mock_disconnect:
@@ -433,8 +436,10 @@ async def test_heartbeat_frozen_stick_schedules_reconnect(
     re-implementation — so the recovery branch is actually exercised (IN-02 closure).
     """
     api = api_with_transport
-    # Stale traffic time so every tick fires a probe
-    api._last_traffic_time = 0.0
+    # Stale traffic time so every tick fires a probe. Use a clock-relative offset,
+    # not 0.0: hass.loop.time() is monotonic (time since boot) and can be
+    # < HEARTBEAT_TRAFFIC_WINDOW on a fresh CI runner, making 0.0 falsely "recent".
+    api._last_traffic_time = hass.loop.time() - HEARTBEAT_TRAFFIC_WINDOW - 10
 
     # Spy on hass.loop.call_later so we can assert it was called (the reconnect
     # scheduler uses hass.loop.call_later, not asyncio.get_running_loop()).
