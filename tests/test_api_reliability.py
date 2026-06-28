@@ -192,3 +192,70 @@ async def test_handle_message_after_drain_no_invalid_state_error(
     # Future keeps its ConnectionError; no InvalidStateError was raised
     assert isinstance(api._verify_future.exception(), ConnectionError)
     api._verify_future.exception()
+
+
+# ---------------------------------------------------------------------------
+# Task 1 (07-02) — initialize_next_device_enum lowest-free-slot allocation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_initialize_next_device_enum_lowest_free_slot(
+    hass: HomeAssistant,
+) -> None:
+    """With 0x11 registered and 0x10 free, returns "10" (lowest free, not max+1)."""
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    api.register_entity("device_1", "11")
+
+    result = api.initialize_next_device_enum()
+
+    assert result == "10"
+
+
+@pytest.mark.asyncio
+async def test_initialize_next_device_enum_reclaims_gap(
+    hass: HomeAssistant,
+) -> None:
+    """After 0x10 is removed while 0x11 is still registered, next alloc returns "10"."""
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    api.register_entity("device_1", "10")
+    api.register_entity("device_2", "11")
+    api.remove_known_device("device_1")
+
+    result = api.initialize_next_device_enum()
+
+    assert result == "10"
+
+
+@pytest.mark.asyncio
+async def test_initialize_next_device_enum_limit_reached(
+    hass: HomeAssistant,
+) -> None:
+    """When all 240 slots (0x10–0xFF) are occupied, returns None (no wraparound)."""
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    # Populate every slot from 0x10 to 0xFF (240 slots total)
+    for slot in range(0x10, 0x100):
+        api.register_entity(f"device_{slot:02X}", f"{slot:02X}")
+
+    result = api.initialize_next_device_enum()
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_pair_device_and_wait_limit_reached(
+    hass: HomeAssistant,
+) -> None:
+    """pair_device_and_wait raises DeviceLimitReached and leaves no dangling future."""
+    from custom_components.schellenberg_usb.api import DeviceLimitReached
+
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    # Fill all slots so initialize_next_device_enum returns None
+    for slot in range(0x10, 0x100):
+        api.register_entity(f"device_{slot:02X}", f"{slot:02X}")
+
+    with pytest.raises(DeviceLimitReached):
+        await api.pair_device_and_wait()
+
+    # No dangling future should remain
+    assert api._pairing_future is None
