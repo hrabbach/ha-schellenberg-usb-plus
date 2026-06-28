@@ -709,12 +709,12 @@ class SchellenbergUsbApi:
     def update_connection_status(self, connected: bool) -> None:
         """Update connection status (called from protocol)."""
         if not connected:
-            # Idempotency guard (review finding 1): a heartbeat-timeout disconnect,
-            # a protocol-level connection_lost, and disconnect() can all land here —
-            # early-return if already disconnected so we never double-drain the queue
-            # or double-cancel already-None tasks.
-            if not self._is_connected:
-                return
+            # Teardown is naturally idempotent (review finding 1):
+            # - cancel on None/done task is skipped by the guard
+            # - drain on empty queue: while loop exits immediately
+            # - _safe_resolve_future on None/done future: returns early
+            # So heartbeat-timeout, connection_lost, and disconnect() can all
+            # call this in any order without double-draining or double-cancelling.
             self._is_connected = False
             # Cancel tasks before draining queue (D-05 ordering)
             if self._retry_worker_task and not self._retry_worker_task.done():
