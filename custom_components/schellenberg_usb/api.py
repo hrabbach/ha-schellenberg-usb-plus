@@ -104,6 +104,10 @@ class SchellenbergUsbApi:
 
         # Reconnect backoff
         self._reconnect_attempts: int = 0
+        # Stored TimerHandle so teardown can cancel a pending reconnect (CR-01).
+        self._reconnect_handle: asyncio.TimerHandle | None = None
+        # Teardown latch: set by disconnect(); connect() is a no-op when True (CR-01).
+        self._closed: bool = False
 
         # Hub options (live-applied from entry.options by __init__.py)
         self._ignore_unknown: bool = False
@@ -122,8 +126,45 @@ class SchellenbergUsbApi:
         jitter = random.uniform(0, raw / 2)
         return raw / 2 + jitter
 
+    def _reconnect_fire(self) -> None:
+        """Fired by the TimerHandle callback; clear the handle and start connect()."""
+        self._reconnect_handle = None
+        self.hass.async_create_task(self.connect())
+
+    def _schedule_reconnect(self) -> None:
+        """Schedule a reconnect attempt via the shared backoff helper.
+
+        This is the single reconnect chokepoint — all reconnect sites
+        (connect() failure, connection_lost, heartbeat frozen-stick branch)
+        must route through here.
+
+        No-op when:
+        - _closed is True (teardown has latched; never reschedule after unload).
+        - _is_connecting is True (a connect() is already in flight).
+        - _reconnect_handle is not None (a reconnect is already armed; prevents
+          _reconnect_attempts double-increment and fan-out — folds WR-04).
+
+        Uses hass.loop (not asyncio.get_running_loop()) so it is safe to call
+        from transport callbacks where no running loop is guaranteed.
+        """
+        if self._closed:
+            return
+        if self._is_connecting:
+            return
+        if self._reconnect_handle is not None:
+            return
+        delay = self._compute_reconnect_delay()
+        self._reconnect_attempts += 1
+        self._reconnect_handle = self.hass.loop.call_later(
+            delay, self._reconnect_fire
+        )
+
     async def connect(self) -> None:
         """Establish a connection to the serial port."""
+        # Guard: once disconnect() has latched _closed, a reconnect callback that
+        # fires in the same tick must not reopen the port (CR-01).
+        if self._closed:
+            return
         if self._is_connecting or (
             self._transport and not self._transport.is_closing()
         ):
@@ -184,6 +225,7 @@ class SchellenbergUsbApi:
 
             # Reset backoff on successful connect
             self._reconnect_attempts = 0
+            self._reconnect_handle = None  # clear any armed handle (belt-and-suspenders)
             self._last_traffic_time = self.hass.loop.time()
 
             # Start the retry worker and heartbeat tasks
@@ -201,12 +243,9 @@ class SchellenbergUsbApi:
                 self.port,
                 err,
             )
-            delay = self._compute_reconnect_delay()
-            self._reconnect_attempts += 1
-            # Always retry with backoff
-            asyncio.get_running_loop().call_later(
-                delay, lambda: self.hass.async_create_task(self.connect())
-            )
+            # Route through the shared single-flight helper: increments
+            # _reconnect_attempts once and stores the TimerHandle (CR-01).
+            self._schedule_reconnect()
         finally:
             self._is_connecting = False
 
@@ -457,10 +496,23 @@ class SchellenbergUsbApi:
                     if miss_count >= HEARTBEAT_MISS_THRESHOLD:
                         _LOGGER.error(
                             "Frozen stick detected (%d consecutive misses)"
-                            " — marking disconnected",
+                            " — marking disconnected and scheduling reconnect",
                             HEARTBEAT_MISS_THRESHOLD,
                         )
                         self.update_connection_status(False)
+                        # Close the frozen-but-open transport (CR-02): a frozen
+                        # stick keeps the OS port open so connection_lost never
+                        # fires — we must drive recovery ourselves.  Closing the
+                        # transport is synchronous (no await) so the single-tick
+                        # self-cancel safety window is preserved (WR-01).
+                        if self._transport is not None:
+                            self._transport.close()
+                            self._transport = None
+                        # Schedule reconnect through the shared single-flight
+                        # chokepoint.  If connection_lost fires later on the
+                        # just-closed transport, _schedule_reconnect no-ops
+                        # because a handle is already pending (WR-04).
+                        self._schedule_reconnect()
                         return  # exits before CancelledError can inject
         except asyncio.CancelledError:
             _LOGGER.debug("Heartbeat worker cancelled")
@@ -723,6 +775,11 @@ class SchellenbergUsbApi:
             if self._heartbeat_task and not self._heartbeat_task.done():
                 self._heartbeat_task.cancel()
             self._heartbeat_task = None
+            # Cancel any pending reconnect callback so a mid-backoff disconnect
+            # does not reopen the port after teardown (CR-01).
+            if self._reconnect_handle is not None:
+                self._reconnect_handle.cancel()
+                self._reconnect_handle = None
             # Drain stale commands so they don't replay on reconnect (SC#2)
             while not self._retry_queue.empty():
                 try:
@@ -933,6 +990,9 @@ class SchellenbergUsbApi:
 
     async def disconnect(self) -> None:
         """Disconnect from the serial port."""
+        # Latch _closed FIRST so any reconnect callback that fires in the same
+        # tick is gated out by connect()'s early-return (CR-01).
+        self._closed = True
         # Route teardown through the single chokepoint: cancels the retry worker +
         # heartbeat AND drains the queue, idempotently (review finding 1).
         # A transport that never fires connection_lost (e.g. a MagicMock in tests)
@@ -980,12 +1040,12 @@ class SchellenbergProtocol(asyncio.Protocol):
         """Called when the connection is lost."""
         _LOGGER.warning("Serial port connection lost: %s", exc)
         self.api.update_connection_status(False)
-        # Schedule a reconnect attempt so a runtime USB blip recovers
-        # automatically. Use hass.loop (not asyncio.get_running_loop()) because
-        # this transport callback can be invoked synchronously — e.g. in tests —
-        # where no running loop is present; hass.loop is always the correct loop.
-        delay = self.api._compute_reconnect_delay()
-        self.api._reconnect_attempts += 1
-        self.api.hass.loop.call_later(
-            delay, lambda: self.api.hass.async_create_task(self.api.connect())
-        )
+        # Clear the stale transport reference before scheduling so the
+        # connect() re-entrancy guard cannot wedge on a transport that
+        # reports is_closing()==False after an abrupt loss (WR-02).
+        self.api._transport = None
+        # Route through the shared single-flight chokepoint (CR-01/WR-04):
+        # increments _reconnect_attempts once and stores the TimerHandle.
+        # Uses hass.loop (not asyncio.get_running_loop()) because this
+        # transport callback may be invoked synchronously without a running loop.
+        self.api._schedule_reconnect()
