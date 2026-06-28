@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -424,20 +425,23 @@ async def test_api_get_device_id_already_in_progress(hass: HomeAssistant) -> Non
 
 @pytest.mark.asyncio
 async def test_api_disconnect_with_retry_task(hass: HomeAssistant) -> None:
-    """Test disconnect cancels retry task."""
+    """Test disconnect cancels retry worker and drains queue."""
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
 
     mock_transport = MagicMock()
     api._transport = mock_transport
+    api._is_connected = True
 
-    # Create a mock retry task
-    mock_retry_task = MagicMock()
-    mock_retry_task.done = MagicMock(return_value=False)
-    api._retry_task = mock_retry_task
+    # Populate the retry queue and create a worker task
+    api._retry_queue.put_nowait("cmd_to_cancel")
+    api._retry_worker_task = hass.async_create_task(api._retry_worker())
+    await asyncio.sleep(0)  # let task start
 
     await api.disconnect()
 
-    mock_retry_task.cancel.assert_called_once()
+    # Retry worker task should be cancelled/done and queue should be drained
+    assert api._retry_worker_task is None or api._retry_worker_task.done()
+    assert api._retry_queue.qsize() == 0
     mock_transport.close.assert_called_once()
 
 
