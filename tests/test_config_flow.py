@@ -491,3 +491,39 @@ async def test_manual_add_default_mode_is_bidirectional(
     assert result["data"][CONF_BIDIRECTIONAL] is True, (
         f"Expected CONF_BIDIRECTIONAL=True (default), got {result['data'][CONF_BIDIRECTIONAL]!r}"
     )
+
+
+@pytest.mark.asyncio
+async def test_async_step_pair_device_limit_reached_inline_error(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """When pair_device_and_wait raises DeviceLimitReached, async_step_pair re-shows
+    the pair form with errors['base'] == 'device_limit_reached' (not an abort).
+
+    REVIEWS finding #4: the inline-error path must be distinct from the
+    pairing_timeout abort path (which fires when pair_device_and_wait returns None).
+    """
+    from custom_components.schellenberg_usb.api import DeviceLimitReached
+
+    handler = _make_handler(hass, mock_hub_entry.entry_id)
+
+    mock_api = MagicMock()
+    mock_api.pair_device_and_wait = AsyncMock(side_effect=DeviceLimitReached)
+    mock_hub_entry.runtime_data = mock_api  # type: ignore[attr-defined]
+
+    # Submit the pair form (non-None user_input triggers the pairing logic)
+    result = await handler.async_step_pair({})
+
+    assert result["type"] == "form", (
+        f"Expected form result, got {result['type']!r}"
+    )
+    assert result["step_id"] == "pair", (
+        f"Expected step_id='pair', got {result.get('step_id')!r}"
+    )
+    assert result["errors"] == {"base": "device_limit_reached"}, (
+        f"Expected device_limit_reached error, got {result.get('errors')!r}"
+    )
+    # Must NOT be an abort (pairing_timeout or otherwise)
+    assert result.get("reason") is None, (
+        f"Expected no abort reason, got {result.get('reason')!r}"
+    )

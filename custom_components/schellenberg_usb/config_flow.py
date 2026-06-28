@@ -29,6 +29,7 @@ from .const import (
     DOMAIN,
     SUBENTRY_TYPE_BLIND,
 )
+from .api import DeviceLimitReached
 from .options_flow import SchellenbergOptionsFlowHandler
 from .options_flow_calibration import CalibrationFlowHandler
 from .options_flow_timed_calibration import TimedCalibrationFlowHandler
@@ -398,7 +399,14 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         api = hub_entry.runtime_data
 
         # Initiate pairing and wait for response (up to 10 seconds)
-        pairing_result = await api.pair_device_and_wait()
+        try:
+            pairing_result = await api.pair_device_and_wait()
+        except DeviceLimitReached:
+            return self.async_show_form(
+                step_id="pair",
+                data_schema=vol.Schema({}),
+                errors={"base": "device_limit_reached"},
+            )
 
         if pairing_result is None:
             # Pairing timeout
