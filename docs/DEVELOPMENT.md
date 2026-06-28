@@ -34,7 +34,7 @@ This project uses **two separate virtual environments** that must never be mixed
 | Venv | Path | Purpose | Where to run |
 |------|------|---------|--------------|
 | `.venv` | Linux/WSL venv on `/mnt/c` (DrvFs) | pytest and runtime deps | WSL only |
-| `.venv-win` | Native Windows venv | ruff, mypy, pre-commit | Windows only |
+| `.venv-win` | Native Windows venv | ruff, mypy, codespell | Windows only |
 
 ### Why two venvs?
 
@@ -173,7 +173,7 @@ All four must pass before pushing.
 ## Code Style
 
 - **Formatter:** ruff-format (configured in `pyproject.toml`)
-- **Linter:** ruff (rules configured in `.pre-commit-config.yaml`)
+- **Linter:** ruff (rules configured in `pyproject.toml` `[tool.ruff.lint.pycodestyle]`)
 - **Max line length:** 80 characters (`[tool.ruff.lint.pycodestyle]` in `pyproject.toml`)
 - **Type checker:** mypy 1.18.2+
 
