@@ -33,14 +33,16 @@ This project uses **two separate virtual environments** that must never be mixed
 
 | Venv | Path | Purpose | Where to run |
 |------|------|---------|--------------|
-| `.venv` | Linux/WSL venv on `/mnt/c` (DrvFs) | pytest and runtime deps | WSL only |
+| `$HOME/.venvs/schellenberg_usb` | WSL ext4 (`/home/holgerr/.venvs/schellenberg_usb`) | pytest and runtime deps | WSL only (via `.wsl_exec.sh`) |
 | `.venv-win` | Native Windows venv | ruff, mypy, codespell | Windows only |
 
 ### Why two venvs?
 
-The `.venv` is a Linux venv created and used inside WSL. Running native Windows `uv`
-against it corrupts it: Windows `uv` deletes the `bin/` directory, cannot remove the
-`lib64` symlink, and leaves the env broken. Keep them strictly separated.
+The WSL venv lives on ext4 (`$HOME/.venvs/schellenberg_usb`), not on the `/mnt/c`
+DrvFs mount. This lets uv hardlink from its ext4 cache — `uv sync --frozen` finishes
+in seconds instead of the ~30 min a DrvFs copy-mode sync required. Running native
+Windows `uv` against this WSL venv corrupts it (deletes `bin/`, cannot remove `lib64`
+symlink). Keep them strictly separated.
 
 ### Creating the WSL venv
 
@@ -66,14 +68,17 @@ Windows — it will either corrupt the venv or produce results from an unrelated
 
 ### The helper script
 
-`.wsl_exec.sh` does three things that make the test suite reliable:
+`.wsl_exec.sh` does four things that make the test suite reliable:
 
 1. Sets `HOME=/home/holgerr` — the Windows-inherited `HOME` is mangled to `C:Users…`
    and breaks uv inside WSL.
-2. Sets `UV_LINK_MODE=copy` — the `.venv` lives on `/mnt/c` (DrvFs) while the uv cache
-   is on WSL ext4. Hardlinks cannot span the two filesystems. Without copy mode, `uv run`
-   re-syncs the entire env on every call, and a killed sync corrupts the venv.
-3. `cd`s to the hardcoded project path — so always run tests on the main checkout, not a
+2. Sets `UV_PROJECT_ENVIRONMENT=$HOME/.venvs/schellenberg_usb` — keeps the venv on ext4
+   so uv can hardlink from its cache. `uv sync --frozen` completes in ~7s; a killed
+   sync cannot corrupt it.
+3. Serializes every invocation through an `flock` mutex — concurrent `uv` calls queue
+   instead of racing and corrupting the env. The lock lives on ext4 where `flock` is
+   reliable.
+4. `cd`s to the hardcoded project path — so tests always run on the main checkout, not a
    git worktree.
 
 ### Run the full suite
@@ -81,25 +86,28 @@ Windows — it will either corrupt the venv or produce results from an unrelated
 From **PowerShell**:
 
 ```powershell
-wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh "uv run pytest -p no:cacheprovider -q"
+wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh "uv run --no-sync pytest -p no:cacheprovider -q"
 ```
+
+`--no-sync` skips uv's implicit env sync on every run. Run `uv sync --frozen` explicitly
+only when dependencies change.
 
 From **Git Bash**, prefix `MSYS_NO_PATHCONV=1` to prevent MSYS path mangling:
 
 ```bash
-MSYS_NO_PATHCONV=1 wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh "uv run pytest -p no:cacheprovider -q"
+MSYS_NO_PATHCONV=1 wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh "uv run --no-sync pytest -p no:cacheprovider -q"
 ```
 
 ### Run a single file or test
 
 ```powershell
-wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh "uv run pytest tests/test_cover.py -p no:cacheprovider -q"
+wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh "uv run --no-sync pytest tests/test_cover.py -p no:cacheprovider -q"
 ```
 
 ### Venv health check
 
 ```powershell
-wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh ".venv/bin/python -c 'import homeassistant.helpers, pytest'"
+wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh "uv run --no-sync python -c 'import homeassistant.helpers, pytest'"
 ```
 
 ### Repair a corrupted venv
@@ -119,31 +127,42 @@ Lint and types run **natively on Windows** using the `.venv-win` venv.
 
 ```powershell
 $env:UV_PROJECT_ENVIRONMENT = ".venv-win"
-uv run ruff check custom_components/ tests/
-uv run ruff format --check custom_components/ tests/
+uv run ruff check custom_components/schellenberg_usb/ tests/
+uv run ruff format --check custom_components/schellenberg_usb/ tests/
 ```
 
 Auto-fix lint violations:
 
 ```powershell
 $env:UV_PROJECT_ENVIRONMENT = ".venv-win"
-uv run ruff check --fix custom_components/ tests/
-uv run ruff format custom_components/ tests/
+uv run ruff check --fix custom_components/schellenberg_usb/ tests/
+uv run ruff format custom_components/schellenberg_usb/ tests/
 ```
 
 From Bash (e.g., CI):
 
 ```bash
-UV_PROJECT_ENVIRONMENT=.venv-win uv run ruff check custom_components/ tests/
-UV_PROJECT_ENVIRONMENT=.venv-win uv run ruff format --check custom_components/ tests/
+UV_PROJECT_ENVIRONMENT=.venv-win uv run ruff check custom_components/schellenberg_usb/ tests/
+UV_PROJECT_ENVIRONMENT=.venv-win uv run ruff format --check custom_components/schellenberg_usb/ tests/
 ```
 
 ### mypy
 
 ```powershell
 $env:UV_PROJECT_ENVIRONMENT = ".venv-win"
-uv run mypy custom_components/ tests/
+uv run mypy custom_components/schellenberg_usb/ tests/
 ```
+
+### codespell
+
+```powershell
+$env:UV_PROJECT_ENVIRONMENT = ".venv-win"
+uv run codespell custom_components/schellenberg_usb/ tests/ README.md CONTRIBUTING.md
+```
+
+The ignore-words list for domain-specific terms (e.g., `hass`, `ser`, German tech terms)
+is configured in the `[tool.codespell]` section of `pyproject.toml`. Add new legitimate
+terms there if codespell flags them.
 
 ## Quality Gate
 
@@ -153,29 +172,33 @@ fires no hooks. Run the following manually before every commit:
 1. `ruff check` — lint (native Windows, `.venv-win`)
 2. `ruff format --check` — formatting (native Windows, `.venv-win`)
 3. `mypy` — type checking (native Windows, `.venv-win`)
-4. `pytest` — test suite (WSL, via `.wsl_exec.sh`)
+4. `codespell` — spell check (native Windows, `.venv-win`)
+5. `pytest` — test suite (WSL, via `.wsl_exec.sh`)
 
-All four must pass before pushing.
+All five must pass before pushing. See [CONTRIBUTING.md](../CONTRIBUTING.md) for the
+canonical gate commands.
 
 ## Build Commands
 
 | Command | Venv | Description |
 |---------|------|-------------|
-| `uv sync --frozen` | `.venv` (WSL) | Install/repair the WSL test venv |
+| `uv sync --frozen` | WSL ext4 venv | Install/repair the WSL test venv |
 | `uv sync --group lint` | `.venv-win` (Windows) | Install/repair the Windows lint venv |
-| `uv run pytest -p no:cacheprovider -q` | `.venv` via helper | Run full test suite |
-| `uv run ruff check custom_components/ tests/` | `.venv-win` | Lint |
-| `uv run ruff format --check custom_components/ tests/` | `.venv-win` | Check formatting |
+| `uv run --no-sync pytest -p no:cacheprovider -q` | WSL ext4 via helper | Run full test suite |
+| `uv run ruff check custom_components/schellenberg_usb/ tests/` | `.venv-win` | Lint |
+| `uv run ruff format --check custom_components/schellenberg_usb/ tests/` | `.venv-win` | Check formatting |
 | `uv run ruff check --fix …` | `.venv-win` | Auto-fix lint violations |
 | `uv run ruff format …` | `.venv-win` | Auto-format |
-| `uv run mypy custom_components/ tests/` | `.venv-win` | Type check |
+| `uv run mypy custom_components/schellenberg_usb/ tests/` | `.venv-win` | Type check |
+| `uv run codespell custom_components/schellenberg_usb/ tests/ README.md CONTRIBUTING.md` | `.venv-win` | Spell check |
 
 ## Code Style
 
 - **Formatter:** ruff-format (configured in `pyproject.toml`)
 - **Linter:** ruff (rules configured in `pyproject.toml` `[tool.ruff.lint.pycodestyle]`)
 - **Max line length:** 80 characters (`[tool.ruff.lint.pycodestyle]` in `pyproject.toml`)
-- **Type checker:** mypy 1.18.2+
+- **Type checker:** mypy 1.18.2+ (configured in `pyproject.toml` `[tool.mypy]`)
+- **Spell checker:** codespell 2.4.1+ (ignore-words list in `pyproject.toml` `[tool.codespell]`)
 
 ### Key conventions
 

@@ -18,10 +18,17 @@ This guide walks you from a fresh install to a working, calibrated Schellenberg 
 
 **Via HACS (recommended)**
 
+This integration is distributed as a custom HACS repository. Add it once, then install as usual:
+
 1. Open HACS in your Home Assistant sidebar.
-2. Go to **Integrations** and click the **+** button.
-3. Search for `Schellenberg USB`, select it, and click **Download**.
-4. Restart Home Assistant when prompted.
+2. Click the **three-dot menu** (top right) and choose **Custom repositories**.
+3. Enter `hrabbach/ha-schellenberg-usb-plus` as the repository and select **Integration** as the category. Click **Add**.
+4. The integration now appears in the HACS list. Search for `Schellenberg USB+`, select it, and click **Download**.
+5. Restart Home Assistant when prompted.
+
+Alternatively, use the one-click badge:
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=hrabbach&repository=ha-schellenberg-usb-plus&category=integration)
 
 **Manual install**
 
@@ -32,7 +39,7 @@ Copy the `custom_components/schellenberg_usb/` folder from this repository into 
 ## Step 2 — Add the integration (hub setup)
 
 1. Go to **Settings → Devices & Services → Add Integration**.
-2. Search for **Schellenberg USB** and select it.
+2. Search for **Schellenberg USB+** and select it.
 3. If the stick was already plugged in, Home Assistant may have auto-discovered it and will ask you to confirm the serial port. Otherwise, enter the port path (default `/dev/ttyUSB0`) and click **Submit**.
 
 The hub entry is now created and the stick connects automatically. For serial port options and USB auto-discovery details see [docs/CONFIGURATION.md](CONFIGURATION.md).
@@ -41,24 +48,26 @@ The hub entry is now created and the stick connects automatically. For serial po
 
 ## Step 3 — Add a motor
 
-Go to **Settings → Devices & Services**, find **Schellenberg USB**, and click **+ Add device**. A menu offers two paths:
+Go to **Settings → Devices & Services**, find **Schellenberg USB+**, and click **+ Add device**. A menu offers two paths:
 
 ### Option A — Auto-pair (motor is nearby and reachable)
 
+Use this when the motor has never been paired to the USB stick and is within radio range.
+
 1. Choose **Pair automatically**.
 2. Put your motor into pairing mode (see [README — Device Pairing Instructions](../README.md#device-pairing-instructions) for button combinations by model).
-3. The integration listens for up to 10 seconds. When the motor responds, you are prompted to give it a friendly name.
-4. Bidirectional motors proceed straight to calibration (Step 4A). No extra steps needed here.
+3. Click **Next** in the dialog. The integration signals the stick to accept the next pairing message and waits up to 2 minutes (the pairing timeout) for the motor to respond.
+4. When the motor responds, you are prompted to give it a friendly name. Bidirectional motors proceed straight to calibration (Step 4A). No extra steps needed here.
 
 ### Option B — Manual add (motor is already paired to the stick)
 
 Use this when the motor was paired by hand before you installed this integration, or when the motor never sends events back (non-bidirectional / timed motors).
 
 1. Choose **Add manually**.
-2. Enter the motor's two-character hexadecimal enum (e.g. `10`, `11`, `12` — check your stick's pairing log or increment from `10` for each motor added).
+2. Enter the motor's two-character hexadecimal enum (e.g. `10`, `11`, `12`). The enum identifies the slot the motor occupies in the stick's pairing table; check your stick's pairing log or use `10` for the first motor, `11` for the second, and so on. The value is case-insensitive and must be exactly two hex characters.
 3. Choose the motor type:
-   - **Bidirectional** — motor sends movement events back to the stick (most ROLLODRIVE PREMIUM motors). Leave this toggled on.
-   - **Timed (non-bidirectional)** — motor never confirms movement; drive-to-position relies on button-press timing. Toggle this off.
+   - **Bidirectional** (toggle on, default) — motor sends movement events back to the stick (most ROLLODRIVE PREMIUM motors). Leave this toggled on.
+   - **Timed (non-bidirectional)** (toggle off) — motor never confirms movement; drive-to-position relies on button-press timing.
 4. Optionally enter a friendly name; if left blank, the name defaults to `Blind <enum>`.
 5. For timed motors only: set an **initial position** (0 = fully closed, 100 = fully open) that reflects where the shutter physically is right now. This seeds position tracking until calibration completes.
 
@@ -76,14 +85,20 @@ Calibration records how many seconds the motor takes to travel from fully closed
 
 The integration detects movement automatically — you control the motor with your physical remote during calibration.
 
-Full step-by-step instructions are in [README — Calibration Steps](../README.md#calibration-steps).
+1. Open the device page for your motor and click the **Calibrate** (gear) icon.
+2. **Step 1 — Close:** Ensure the shutter is fully closed (all the way down), then press **Next**.
+3. **Step 2 — Measure open time:** Press the **open** button on your physical remote. The integration waits for the motor's "started moving up" event and begins timing automatically. Wait for the motor to reach the top endstop and stop. The integration detects the stop event and advances.
+4. **Step 3 — Measure close time:** Press the **close** button on your physical remote. The integration waits for the motor's "started moving down" event and begins timing automatically. Wait for the motor to reach the bottom endstop and stop.
+5. **Complete:** The measured open and close times are displayed. Press **Next** to save.
+
+Full model-specific pairing instructions are in [README — Device Pairing Instructions](../README.md#device-pairing-instructions).
 
 ### 4B — Timed (non-bidirectional) motors (button-press timing)
 
 The integration drives the motor itself and measures elapsed time between your button presses — no motor events are required.
 
 1. Open the device page for your motor and click the **Calibrate** (gear) icon.
-2. **Precondition step:** Confirm that the shutter is fully open (at the top) before proceeding.
+2. **Precondition step:** Confirm that the shutter is fully open (at the top) before proceeding, then press **Next**.
 3. **Close run:** The integration sends a close command automatically. Wait until the motor reaches the bottom endstop and stops on its own, then press **Next**. (Valid travel: 2 – 120 seconds.)
 4. **Open run:** The integration sends an open command automatically. Wait until the motor reaches the top endstop and stops on its own, then press **Next**.
 5. **Confirm:** The measured open and close times are shown. Press **Done** to save, or check **Redo** to repeat the measurements.
@@ -115,7 +130,9 @@ If travel times change (motor replaced, mechanical adjustment, etc.), open the m
 |---------|--------------|-----|
 | Integration not found after install | HA not restarted, or browser cache | Restart HA; clear browser cache |
 | "Cannot connect" on serial port | Wrong path or permission denied | Verify the path with `ls /dev/tty*`; add the HA user to the `dialout` group |
-| Auto-pair times out | Motor not in pairing mode, or out of range | Move the stick closer; retry pairing mode on the motor |
+| Auto-pair times out | Motor not in pairing mode, out of range, or Next not clicked in time | Put motor in pairing mode first, then click Next in the dialog; move the stick closer if needed |
+| `invalid_enum_format` error on manual add | Enum is not exactly two hex characters | Use values like `10`, `11`, `1A` — no prefix, no spaces |
+| `duplicate_enum` error on manual add | That enum is already used by another motor | Each motor must have a unique two-character hex enum |
 | Timed calibration rejects "too short" | Submitted before motor reached endstop | Wait for the motor to stop completely before pressing Next |
 | Position drifts over time | Calibration times no longer accurate | Recalibrate from the device page |
 

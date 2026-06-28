@@ -17,7 +17,7 @@ This is not a bug and must not be "fixed." The Home Assistant test infrastructur
 
 | Tool | Where it runs | Venv |
 |------|---------------|------|
-| `pytest` | WSL/Linux only, via `.wsl_exec.sh` | `.venv` (WSL/Linux venv on `/mnt/c`) |
+| `pytest` | WSL/Linux only, via `.wsl_exec.sh` | `$HOME/.venvs/schellenberg_usb` (ext4, inside WSL) |
 | `ruff` | Native Windows | `.venv-win` |
 | `mypy` | Native Windows | `.venv-win` |
 
@@ -26,7 +26,7 @@ This is not a bug and must not be "fixed." The Home Assistant test infrastructur
 ### From PowerShell (standard)
 
 ```powershell
-wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh "uv run pytest -p no:cacheprovider -q"
+wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh "uv run --no-sync pytest -p no:cacheprovider -q"
 ```
 
 Substitute the absolute path to `.wsl_exec.sh` if your checkout is in a different location.
@@ -36,21 +36,23 @@ Substitute the absolute path to `.wsl_exec.sh` if your checkout is in a differen
 The Git Bash shell applies MSYS path conversion and silently mangles `/mnt/c/...` into `C:/Program Files/Git/mnt/c/...`. The suite will appear to start but tests will never run. Always prefix `MSYS_NO_PATHCONV=1`:
 
 ```bash
-MSYS_NO_PATHCONV=1 wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh "uv run pytest -p no:cacheprovider -q"
+MSYS_NO_PATHCONV=1 wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh "uv run --no-sync pytest -p no:cacheprovider -q"
 ```
 
 ### Why `.wsl_exec.sh` Is Mandatory
 
-The project `.venv` lives on `/mnt/c` (DrvFs) while uv's cache lives on WSL ext4 (`$HOME`). Hardlinks cannot span the two filesystems. Running `uv run pytest` directly causes uv to re-sync the entire environment on every call, and an interrupted re-sync corrupts the venv (symptoms: missing `homeassistant.helpers`, etc.).
+The helper sets `UV_PROJECT_ENVIRONMENT=$HOME/.venvs/schellenberg_usb`, keeping the venv on WSL ext4 rather than `/mnt/c` (DrvFs). uv's package cache also lives on ext4, so uv can hardlink packages into the venv — `uv sync --frozen` finishes in seconds instead of the ~30 minutes a DrvFs copy-mode sync required.
 
-`.wsl_exec.sh` exports `UV_LINK_MODE=copy` so the install completes in one pass and stays stable. It also fixes the WSL `HOME` variable, which is mangled to a Windows path when inherited from the Windows environment.
+Using `uv run --no-sync pytest` means routine test runs never trigger an implicit sync at all. Run `uv sync --frozen` explicitly only when dependencies actually change.
+
+The helper also serializes every invocation through an `flock` mutex (`$HOME/.schellenberg_usb_wsl_exec.lock`) so concurrent uv calls queue instead of racing and corrupting the environment. It strips the Windows-inherited `HOME` variable, which WSL otherwise mangles to a Windows path.
 
 **Never invoke `uv` or `pytest` outside `.wsl_exec.sh` against this venv.**
 
 ### Venv Health Check
 
 ```powershell
-wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh ".venv/bin/python -c 'import homeassistant.helpers, pytest'"
+wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh "uv run --no-sync python -c 'import homeassistant.helpers, pytest'"
 ```
 
 If this fails, repair the venv:
@@ -64,18 +66,18 @@ wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenber
 Pass the file path as a pytest argument inside the quoted command string:
 
 ```powershell
-wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh "uv run pytest tests/test_cover.py -p no:cacheprovider -q"
+wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh "uv run --no-sync pytest tests/test_cover.py -p no:cacheprovider -q"
 ```
 
 Run a specific test by node ID:
 
 ```powershell
-wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh "uv run pytest tests/test_api.py::test_api_initialization -p no:cacheprovider -v"
+wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh "uv run --no-sync pytest tests/test_api.py::test_api_initialization -p no:cacheprovider -v"
 ```
 
 ## Test Organization
 
-All tests live in `tests/`. The suite has approximately 207 tests across these files:
+All tests live in `tests/`. The suite has approximately 208 tests across these files:
 
 | File | What it covers |
 |------|----------------|
@@ -90,8 +92,9 @@ All tests live in `tests/`. The suite has approximately 207 tests across these f
 | `test_cover.py` | `SchellenbergCover` entity: open/close/set position, calibration, position tracking |
 | `test_sensor.py` | Sensor entities: stick connection status, firmware version, device mode |
 | `test_switch.py` | `SchellenbergLedSwitch` entity: on/off commands, state reporting |
-| `test_timed_calibration_flow.py` | Timed calibration flow (Phase 4): happy path, guard conditions (too short/too long) |
-| `test_timed_cal_handler_structure.py` | RED-phase structural tests for `TimedCalibrationFlowHandler` interface and guard constants |
+| `test_timed_calibration_flow.py` | Timed calibration flow: happy path, guard conditions (too short/too long) |
+| `test_timed_cal_handler_structure.py` | Structural tests for `TimedCalibrationFlowHandler` interface and guard constants |
+| `test_quality_gate_tooling.py` | Regression guards for quality-gate invariants: no `.pre-commit-config.yaml`, codespell in `pyproject.toml`, CONTRIBUTING.md documents all four gate tools |
 
 ### Shared Fixtures (`conftest.py`)
 
@@ -122,7 +125,7 @@ asyncio_default_fixture_loop_scope = "function"
 ```
 
 Key settings:
-- `-n4` — runs tests in parallel across 4 workers (pytest-xdist)
+- `-n4` — runs tests in parallel across 4 workers (pytest-xdist, pulled in transitively via `pytest-homeassistant-custom-component`)
 - `--strict-markers` — unregistered pytest marks cause an error
 - `--cov=custom_components` — coverage measured over `custom_components/`
 - `asyncio_mode = "auto"` — all `async def` test functions are treated as asyncio tests automatically
@@ -132,7 +135,7 @@ Key settings:
 Coverage is enabled by default via `--cov=custom_components` in `addopts`. After a test run, a summary is printed to the terminal. To generate an HTML report:
 
 ```powershell
-wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh "uv run pytest -p no:cacheprovider --cov=custom_components --cov-report=html"
+wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenberg_usb/.wsl_exec.sh "uv run --no-sync pytest -p no:cacheprovider --cov=custom_components --cov-report=html"
 ```
 
 The HTML report is written to `htmlcov/index.html`. Coverage configuration:
@@ -176,6 +179,15 @@ uv run mypy custom_components/
 ```
 
 mypy targets Python 3.13 and uses `follow_imports = "silent"` and `ignore_missing_imports = true` to avoid noise from untyped third-party dependencies.
+
+### codespell
+
+```powershell
+$env:UV_PROJECT_ENVIRONMENT = ".venv-win"
+uv run codespell
+```
+
+codespell is configured in `[tool.codespell]` in `pyproject.toml` with a domain-specific ignore list for HA APIs, abbreviations, and German tech terms.
 
 ## Writing New Tests
 
