@@ -457,16 +457,23 @@ async def test_api_update_connection_status(hass: HomeAssistant) -> None:
 
 
 @pytest.mark.asyncio
-async def test_api_initialize_next_device_enum_wrap_around(hass: HomeAssistant) -> None:
-    """Test enum wraps around at 0xFF."""
+async def test_api_initialize_next_device_enum_no_wraparound_at_limit(
+    hass: HomeAssistant,
+) -> None:
+    """A high-numbered occupied slot does not force a wrap — lowest free slot wins.
+
+    With only 0xFF registered, slots 0x10–0xFE are still free, so the allocator
+    returns "10" (lowest free), NOT a value past 0xFF.  This proves the old
+    max+1 logic is gone: no silent reuse of live enums via wraparound.
+    """
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
 
-    # Set a device with enum at max
+    # Register a single device at the highest possible enum
     api.register_entity("device_1", "FF")
 
     result = api.initialize_next_device_enum()
 
-    # Should wrap back to starting value
+    # Lowest free slot is 0x10 — not wrapping past 0xFF
     assert result == "10"
 
 

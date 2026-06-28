@@ -41,6 +41,7 @@ from .const import (
     CMD_UP,
     CMD_VERIFY,
     DEVICE_ID_TIMEOUT,
+    MAX_DEVICE_ENUM,
     PAIRING_DEVICE_ENUM_START,
     PAIRING_TIMEOUT,
     SIGNAL_DEVICE_EVENT,
@@ -49,6 +50,10 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class DeviceLimitReached(Exception):
+    """Raised when all device enum slots (0x10–0xFF) are occupied."""
 
 
 class SchellenbergUsbApi:
@@ -364,6 +369,12 @@ class SchellenbergUsbApi:
         # Get the next available device enumerator
         device_enum = self.initialize_next_device_enum()
 
+        # Raise before formatting pair_command (so "ssNone9..." is never built)
+        # and before create_future() (so no dangling future is left) — D-02.
+        if device_enum is None:
+            _LOGGER.warning("Device enum limit reached - cannot pair new device")
+            raise DeviceLimitReached
+
         # Format: ssXX9CCPPPP
         # ss = transmit prefix
         # XX = device enumerator (2 hex chars)
@@ -449,46 +460,48 @@ class SchellenbergUsbApi:
         _LOGGER.debug("Sending blind control: %s", command)
         await self.send_command(command)
 
-    def initialize_next_device_enum(self) -> str:
+    def initialize_next_device_enum(self) -> str | None:
         """Get the next available device enum based on registered devices.
 
-        Returns the next available device enumerator as a hex string (e.g., "10").
+        Returns the lowest free device enumerator as a hex string (e.g., "10"),
+        or None when all slots 0x10–0xFF are occupied (no wraparound).
 
-        This is a stateless method that computes the next available enum
-        by finding the highest enum in registered devices and returning one higher.
+        Reclaims slots freed by removed devices instead of burning enums
+        over add/remove cycles (D-01/D-02).
         """
-        if not self._registered_devices:
-            _LOGGER.debug(
-                "No registered devices found, starting enum at %s",
-                f"{PAIRING_DEVICE_ENUM_START:02X}",
-            )
-            return f"{PAIRING_DEVICE_ENUM_START:02X}"
-
-        # Find the highest enum value from registered devices
-        max_enum = PAIRING_DEVICE_ENUM_START - 1
+        # Build the set of currently-used enum values (skip malformed entries)
+        used: set[int] = set()
         for device_enum in self._registered_devices.values():
             try:
-                enum_value = int(device_enum, 16)
-                max_enum = max(max_enum, enum_value)
-            except (ValueError, TypeError) as err:
-                _LOGGER.warning("Invalid enum value for device: %s", err)
+                used.add(int(device_enum, 16))
+            except (ValueError, TypeError):
+                pass  # malformed enum: skip silently
 
-        # Next enum is 1 higher than the highest
-        next_enum = max_enum + 1
-        if next_enum > 0xFF:
-            next_enum = PAIRING_DEVICE_ENUM_START
-            _LOGGER.warning(
-                "Next enum exceeded 0xFF, wrapping back to %s",
-                f"{PAIRING_DEVICE_ENUM_START:02X}",
-            )
+        # Scan for the lowest free slot in the valid range
+        for slot in range(PAIRING_DEVICE_ENUM_START, MAX_DEVICE_ENUM + 1):
+            if slot not in used:
+                result = f"{slot:02X}"
+                # If the chosen slot is below the current high-water mark,
+                # it is a reclaimed gap from a previously-removed device.
+                # Emit an operator hint so they can factory-reset any still-
+                # powered motor on that slot (T-07-05 partial mitigation).
+                if used and slot < max(used):
+                    _LOGGER.info(
+                        "Reclaiming previously-used device enum %s"
+                        " - if the old motor on this slot is still powered,"
+                        " factory-reset it to avoid stale status frames",
+                        result,
+                    )
+                _LOGGER.debug("Next device enum: %s", result)
+                return result
 
-        result = f"{next_enum:02X}"
-        _LOGGER.debug(
-            "Computed next device enum as %s (highest existing: %s)",
-            result,
-            f"{max_enum:02X}",
+        # All 240 slots are occupied — surface the limit, do not wrap
+        _LOGGER.warning(
+            "Device enum limit reached: all slots %02X-%02X are occupied",
+            PAIRING_DEVICE_ENUM_START,
+            MAX_DEVICE_ENUM,
         )
-        return result
+        return None
 
     def register_existing_devices(self, devices: list[dict]) -> None:
         """Register existing devices from storage.
