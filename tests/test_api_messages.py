@@ -95,19 +95,21 @@ async def test_handle_message_transmit_ack_t0(hass: HomeAssistant) -> None:
 async def test_handle_message_transmit_error_with_pending_retry(
     hass: HomeAssistant,
 ) -> None:
-    """Test handling transmit error with pending retry command."""
+    """Test handling transmit error enqueues in-flight command for retry."""
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
-    api._pending_retry_command = "test_command"
+    api._in_flight_command = "test_command"
 
     mock_transport = MagicMock()
     mock_transport.is_closing = MagicMock(return_value=False)
     api._transport = mock_transport
 
-    with patch("asyncio.create_task") as mock_create_task:
-        api._handle_message("tE")
+    api._handle_message("tE")
 
-        # Should schedule a retry task
-        mock_create_task.assert_called_once()
+    # Should enqueue the in-flight command for retry via the bounded queue
+    assert api._retry_queue.qsize() == 1
+    assert api._retry_queue.get_nowait() == "test_command"
+    # In-flight slot must be cleared
+    assert api._in_flight_command is None
 
 
 @pytest.mark.asyncio

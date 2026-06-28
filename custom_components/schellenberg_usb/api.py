@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from collections.abc import Callable
 from typing import Any
 
@@ -42,9 +43,16 @@ from .const import (
     CMD_UP,
     CMD_VERIFY,
     DEVICE_ID_TIMEOUT,
+    HEARTBEAT_INTERVAL,
+    HEARTBEAT_MISS_THRESHOLD,
+    HEARTBEAT_TRAFFIC_WINDOW,
     MAX_DEVICE_ENUM,
     PAIRING_DEVICE_ENUM_START,
     PAIRING_TIMEOUT,
+    RECONNECT_BACKOFF_BASE,
+    RECONNECT_BACKOFF_CAP,
+    RETRY_DELAY,
+    RETRY_QUEUE_CAP,
     SIGNAL_DEVICE_EVENT,
     SIGNAL_STICK_STATUS_UPDATED,
     VERIFY_TIMEOUT,
@@ -84,14 +92,79 @@ class SchellenbergUsbApi:
         self._hub_id: str | None = None
 
         # Retry queue for commands that failed with "stick busy"
-        self._pending_retry_command: str | None = None
-        self._retry_task: asyncio.Task[None] | None = None
+        self._in_flight_command: str | None = None
+        self._retry_queue: asyncio.Queue[str] = asyncio.Queue(
+            maxsize=RETRY_QUEUE_CAP
+        )
+        self._retry_worker_task: asyncio.Task[None] | None = None
+
+        # Heartbeat for frozen-stick detection
+        self._heartbeat_task: asyncio.Task[None] | None = None
+        self._last_traffic_time: float = 0.0  # 0.0 sentinel; set on connect
+
+        # Reconnect backoff
+        self._reconnect_attempts: int = 0
+        # Stored TimerHandle so teardown can cancel a pending reconnect (CR-01).
+        self._reconnect_handle: asyncio.TimerHandle | None = None
+        # Teardown latch: set by disconnect(); connect() is a no-op when True (CR-01).
+        self._closed: bool = False
 
         # Hub options (live-applied from entry.options by __init__.py)
         self._ignore_unknown: bool = False
 
+    def _compute_reconnect_delay(self) -> float:
+        """Return next reconnect delay: truncated exponential backoff, equal jitter.
+
+        Sequence (attempt 0..N): 5, 10, 20, 40, 80, 160, 300, 300, ...
+        Each value is half fixed + half random (equal jitter).
+        Caller increments _reconnect_attempts; reset to 0 on successful connect.
+        """
+        raw = min(
+            RECONNECT_BACKOFF_BASE * (2 ** self._reconnect_attempts),
+            RECONNECT_BACKOFF_CAP,
+        )
+        jitter = random.uniform(0, raw / 2)
+        return raw / 2 + jitter
+
+    def _reconnect_fire(self) -> None:
+        """Fired by the TimerHandle callback; clear the handle and start connect()."""
+        self._reconnect_handle = None
+        self.hass.async_create_task(self.connect())
+
+    def _schedule_reconnect(self) -> None:
+        """Schedule a reconnect attempt via the shared backoff helper.
+
+        This is the single reconnect chokepoint — all reconnect sites
+        (connect() failure, connection_lost, heartbeat frozen-stick branch)
+        must route through here.
+
+        No-op when:
+        - _closed is True (teardown has latched; never reschedule after unload).
+        - _is_connecting is True (a connect() is already in flight).
+        - _reconnect_handle is not None (a reconnect is already armed; prevents
+          _reconnect_attempts double-increment and fan-out — folds WR-04).
+
+        Uses hass.loop (not asyncio.get_running_loop()) so it is safe to call
+        from transport callbacks where no running loop is guaranteed.
+        """
+        if self._closed:
+            return
+        if self._is_connecting:
+            return
+        if self._reconnect_handle is not None:
+            return
+        delay = self._compute_reconnect_delay()
+        self._reconnect_attempts += 1
+        self._reconnect_handle = self.hass.loop.call_later(
+            delay, self._reconnect_fire
+        )
+
     async def connect(self) -> None:
         """Establish a connection to the serial port."""
+        # Guard: once disconnect() has latched _closed, a reconnect callback that
+        # fires in the same tick must not reopen the port (CR-01).
+        if self._closed:
+            return
         if self._is_connecting or (
             self._transport and not self._transport.is_closing()
         ):
@@ -110,7 +183,6 @@ class SchellenbergUsbApi:
                 self.port,
                 baudrate=112500,
             )
-            self._is_connecting = False
             _LOGGER.info("Successfully connected to Schellenberg USB stick")
 
             # Verify this is a Schellenberg device
@@ -150,22 +222,40 @@ class SchellenbergUsbApi:
                 _LOGGER.info("Hub device ID retrieved: %s", self._hub_id)
             else:
                 _LOGGER.warning("Failed to retrieve hub device ID")
+
+            # Reset backoff on successful connect
+            self._reconnect_attempts = 0
+            self._reconnect_handle = None  # clear any armed handle (belt-and-suspenders)
+            self._last_traffic_time = self.hass.loop.time()
+
+            # Start the retry worker and heartbeat tasks
+            self._retry_worker_task = self.hass.async_create_task(
+                self._retry_worker(),
+                name="schellenberg_retry_worker",
+            )
+            self._heartbeat_task = self.hass.async_create_task(
+                self._heartbeat_worker(),
+                name="schellenberg_heartbeat",
+            )
         except (serial_asyncio.serial.SerialException, OSError) as err:
             _LOGGER.error(
-                "Failed to connect to %s: %s. Retrying in 5 seconds",
+                "Failed to connect to %s: %s. Retrying with backoff",
                 self.port,
                 err,
             )
+            # Route through the shared single-flight helper: increments
+            # _reconnect_attempts once and stores the TimerHandle (CR-01).
+            self._schedule_reconnect()
+        finally:
             self._is_connecting = False
-            # Always retry after 5 seconds
-            asyncio.get_running_loop().call_later(
-                5, lambda: self.hass.async_create_task(self.connect())
-            )
 
     @callback
     def _handle_message(self, message: str) -> None:
         """Handle incoming messages from the protocol."""
         _LOGGER.debug("Received raw message: %s", message)
+
+        # Update inbound traffic timestamp — all inbound frames are real traffic
+        self._last_traffic_time = self.hass.loop.time()
 
         # Handle device verification response (format: RFTU_V20 F:20180510_DFBD B:1)
         # RFTU_V20 = device type and version
@@ -202,17 +292,28 @@ class SchellenbergUsbApi:
         # Handle acknowledgments
         if message in ("t1", "t0"):
             _LOGGER.debug("Transmit ACK: %s", message)
+            # Protocol is half-duplex; a duplicate tE is not expected. Clearing
+            # the in-flight slot on ack is a cheap guard against enqueuing an
+            # already-acked command if a spurious/late tE ever arrives
+            # (review finding 4).
+            self._in_flight_command = None
             return
 
         if message == "tE":
-            _LOGGER.warning("Transmit error - stick busy, will retry in 50ms")
-            # Schedule a retry if we have a pending command
-            if self._pending_retry_command:
-                if self._retry_task and not self._retry_task.done():
-                    self._retry_task.cancel()
-                self._retry_task = asyncio.create_task(
-                    self._retry_command_after_delay()
-                )
+            cmd = self._in_flight_command
+            self._in_flight_command = None
+            if cmd is not None:
+                try:
+                    self._retry_queue.put_nowait(cmd)
+                    _LOGGER.warning(
+                        "Stick busy (tE) — command queued for retry: %s", cmd
+                    )
+                except asyncio.QueueFull:
+                    _LOGGER.warning(
+                        "Retry backlog full (cap=%d) — dropping command: %s",
+                        RETRY_QUEUE_CAP,
+                        cmd,
+                    )
             return
 
         # Handle device ID response (format: sr5D3E7C where 5D3E7C is the device ID)
@@ -331,32 +432,91 @@ class SchellenbergUsbApi:
             except (IndexError, ValueError) as err:
                 _LOGGER.debug("Failed to parse message %s: %s", message, err)
 
-    async def send_command(self, command: str) -> None:
+    async def send_command(
+        self, command: str, *, track_traffic: bool = True
+    ) -> None:
         """Send a command to the USB stick."""
         if self._transport is None or self._transport.is_closing():
             _LOGGER.warning("Serial port not connected. Command dropped: %s", command)
             return
 
-        # Store command for potential retry on "stick busy" error
-        self._pending_retry_command = command
+        # Capture in-flight command BEFORE write — no await between capture and
+        # write (single event-loop tick guarantee for tE correlation).
+        self._in_flight_command = command
 
         full_command = f"{command}\r\n".encode("ascii")
         _LOGGER.debug("Sending to serial device: %s", full_command.strip())
         self._transport.write(full_command)
+        if track_traffic:
+            # Stamp outbound traffic timestamp. Heartbeat probe passes
+            # track_traffic=False so it does not feed its own skip window
+            # (review finding 2).
+            self._last_traffic_time = self.hass.loop.time()
         _LOGGER.debug("Command sent to serial device: %s", full_command.strip())
 
-    async def _retry_command_after_delay(self) -> None:
-        """Retry sending the pending command after a 100ms delay."""
+    async def _retry_worker(self) -> None:
+        """Drain the retry queue, re-sending each command via the normal path."""
         try:
-            await asyncio.sleep(0.1)  # 100 milliseconds
-            if self._pending_retry_command:
-                command = self._pending_retry_command
-                _LOGGER.debug("Retrying command after stick busy: %s", command)
+            while True:
+                command = await self._retry_queue.get()
+                await asyncio.sleep(RETRY_DELAY)
+                _LOGGER.debug("Retry worker re-sending: %s", command)
                 await self.send_command(command)
+                self._retry_queue.task_done()
         except asyncio.CancelledError:
-            _LOGGER.debug("Retry task cancelled")
-        finally:
-            self._retry_task = None
+            _LOGGER.debug("Retry worker cancelled")
+            raise  # always re-raise so the task exits cleanly
+
+    async def _heartbeat_worker(self) -> None:
+        """Periodic frozen-stick detection via CMD_VERIFY."""
+        miss_count = 0
+        try:
+            while True:
+                await asyncio.sleep(HEARTBEAT_INTERVAL)
+                if self._is_connecting or not self._is_connected:
+                    continue
+                elapsed = self.hass.loop.time() - self._last_traffic_time
+                if elapsed < HEARTBEAT_TRAFFIC_WINDOW:
+                    _LOGGER.debug(
+                        "Heartbeat skip — traffic %.1fs ago", elapsed
+                    )
+                    miss_count = 0
+                    continue
+                _LOGGER.debug("Heartbeat probe — sending CMD_VERIFY")
+                ok = await self.verify_device(heartbeat_probe=True)
+                if ok:
+                    miss_count = 0
+                else:
+                    miss_count += 1
+                    _LOGGER.warning(
+                        "Heartbeat miss %d/%d — stick unresponsive",
+                        miss_count,
+                        HEARTBEAT_MISS_THRESHOLD,
+                    )
+                    if miss_count >= HEARTBEAT_MISS_THRESHOLD:
+                        _LOGGER.error(
+                            "Frozen stick detected (%d consecutive misses)"
+                            " — marking disconnected and scheduling reconnect",
+                            HEARTBEAT_MISS_THRESHOLD,
+                        )
+                        self.update_connection_status(False)
+                        # Close the frozen-but-open transport (CR-02): a frozen
+                        # stick keeps the OS port open so connection_lost never
+                        # fires — we must drive recovery ourselves.  Closing the
+                        # transport is synchronous (no await) so the single-tick
+                        # self-cancel safety window is preserved (WR-01).
+                        if self._transport is not None:
+                            self._transport.close()
+                            self._transport = None
+                        # Schedule reconnect through the shared single-flight
+                        # chokepoint.  If connection_lost fires later on the
+                        # just-closed transport, _schedule_reconnect no-ops
+                        # because a handle is already pending (WR-04).
+                        self._schedule_reconnect()
+                        return  # exits before CancelledError can inject
+        except asyncio.CancelledError:
+            _LOGGER.debug("Heartbeat worker cancelled")
+            raise
 
     async def pair_device_and_wait(self) -> tuple[str, str] | None:
         """Put the stick into pairing mode and wait for a device to pair.
@@ -543,7 +703,7 @@ class SchellenbergUsbApi:
             "Registered entity for device %s with enum %s", device_id, device_enum
         )
 
-    async def verify_device(self) -> bool:
+    async def verify_device(self, *, heartbeat_probe: bool = False) -> bool:
         """Verify this is a Schellenberg USB stick by sending !? command.
 
         Returns True if verification succeeds, False otherwise.
@@ -556,8 +716,9 @@ class SchellenbergUsbApi:
         self._verify_future = asyncio.get_running_loop().create_future()
 
         try:
-            # Send the verification command
-            await self.send_command(CMD_VERIFY)
+            # Heartbeat probe is exempt from the outbound traffic stamp so it
+            # does not feed its own skip window (review finding 2).
+            await self.send_command(CMD_VERIFY, track_traffic=not heartbeat_probe)
 
             # Wait for verification response with timeout
             result = await asyncio.wait_for(self._verify_future, timeout=VERIFY_TIMEOUT)
@@ -599,14 +760,41 @@ class SchellenbergUsbApi:
 
     def update_connection_status(self, connected: bool) -> None:
         """Update connection status (called from protocol)."""
-        self._is_connected = connected
         if not connected:
+            # Teardown is naturally idempotent (review finding 1):
+            # - cancel on None/done task is skipped by the guard
+            # - drain on empty queue: while loop exits immediately
+            # - _safe_resolve_future on None/done future: returns early
+            # So heartbeat-timeout, connection_lost, and disconnect() can all
+            # call this in any order without double-draining or double-cancelling.
+            self._is_connected = False
+            # Cancel tasks before draining queue (D-05 ordering)
+            if self._retry_worker_task and not self._retry_worker_task.done():
+                self._retry_worker_task.cancel()
+            self._retry_worker_task = None
+            if self._heartbeat_task and not self._heartbeat_task.done():
+                self._heartbeat_task.cancel()
+            self._heartbeat_task = None
+            # Cancel any pending reconnect callback so a mid-backoff disconnect
+            # does not reopen the port after teardown (CR-01).
+            if self._reconnect_handle is not None:
+                self._reconnect_handle.cancel()
+                self._reconnect_handle = None
+            # Drain stale commands so they don't replay on reconnect (SC#2)
+            while not self._retry_queue.empty():
+                try:
+                    self._retry_queue.get_nowait()
+                    self._retry_queue.task_done()
+                except asyncio.QueueEmpty:
+                    break
             # Fail all pending futures immediately so suspended flows return
             # within seconds instead of hanging for the full timeout (D-10).
             err = ConnectionError("Serial port disconnected")
             self._safe_resolve_future(self._pairing_future, exception=err)
             self._safe_resolve_future(self._verify_future, exception=err)
             self._safe_resolve_future(self._device_id_future, exception=err)
+        else:
+            self._is_connected = True
         self._update_status()
 
     @property
@@ -802,12 +990,16 @@ class SchellenbergUsbApi:
 
     async def disconnect(self) -> None:
         """Disconnect from the serial port."""
-        # Cancel any pending retry task
-        if self._retry_task and not self._retry_task.done():
-            self._retry_task.cancel()
-            self._retry_task = None
+        # Latch _closed FIRST so any reconnect callback that fires in the same
+        # tick is gated out by connect()'s early-return (CR-01).
+        self._closed = True
+        # Route teardown through the single chokepoint: cancels the retry worker +
+        # heartbeat AND drains the queue, idempotently (review finding 1).
+        # A transport that never fires connection_lost (e.g. a MagicMock in tests)
+        # is handled correctly because the drain does not depend on connection_lost.
+        self.update_connection_status(False)
 
-        # Cancel any pending stop-pairing task (survives transport close otherwise)
+        # _stop_pairing_task is not handled by the chokepoint — cancel it here.
         if self._stop_pairing_task and not self._stop_pairing_task.done():
             self._stop_pairing_task.cancel()
             self._stop_pairing_task = None
@@ -848,10 +1040,12 @@ class SchellenbergProtocol(asyncio.Protocol):
         """Called when the connection is lost."""
         _LOGGER.warning("Serial port connection lost: %s", exc)
         self.api.update_connection_status(False)
-        # Schedule a reconnect attempt so a runtime USB blip recovers
-        # automatically. Use hass.loop (not asyncio.get_running_loop()) because
-        # this transport callback can be invoked synchronously — e.g. in tests —
-        # where no running loop is present; hass.loop is always the correct loop.
-        self.api.hass.loop.call_later(
-            5, lambda: self.api.hass.async_create_task(self.api.connect())
-        )
+        # Clear the stale transport reference before scheduling so the
+        # connect() re-entrancy guard cannot wedge on a transport that
+        # reports is_closing()==False after an abrupt loss (WR-02).
+        self.api._transport = None
+        # Route through the shared single-flight chokepoint (CR-01/WR-04):
+        # increments _reconnect_attempts once and stores the TimerHandle.
+        # Uses hass.loop (not asyncio.get_running_loop()) because this
+        # transport callback may be invoked synchronously without a running loop.
+        self.api._schedule_reconnect()
