@@ -444,7 +444,12 @@ class SchellenbergUsbApi:
             _LOGGER.debug("Stopping pairing mode with command: sp")
             await self.send_command(CMD_GET_PARAM_P)
             _LOGGER.info("Pairing mode stopped")
+        except asyncio.CancelledError:
+            _LOGGER.debug("Stop-pairing task cancelled during teardown")
+            raise  # always re-raise CancelledError so the task terminates cleanly
         except OSError as err:
+            # send_command may raise OSError if the transport was closed; this is
+            # expected during teardown when disconnect() races with the delay sleep.
             _LOGGER.debug("Error stopping pairing mode (communication error): %s", err)
 
     async def control_blind(self, device_enum: str, action: str) -> None:
