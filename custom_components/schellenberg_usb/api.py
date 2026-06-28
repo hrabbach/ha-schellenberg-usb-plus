@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from typing import Any
 
 import serial_asyncio_fast as serial_asyncio
 from homeassistant.core import HomeAssistant, callback
@@ -565,8 +566,8 @@ class SchellenbergUsbApi:
 
     def _safe_resolve_future(
         self,
-        future: asyncio.Future | None,
-        result: object = None,
+        future: asyncio.Future[Any] | None,
+        result: Any = None,
         *,
         exception: BaseException | None = None,
     ) -> None:
