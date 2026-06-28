@@ -40,6 +40,7 @@ from .const import (
     CMD_TRANSMIT,
     CMD_UP,
     CMD_VERIFY,
+    DEVICE_ID_TIMEOUT,
     PAIRING_DEVICE_ENUM_START,
     PAIRING_TIMEOUT,
     SIGNAL_DEVICE_EVENT,
@@ -188,8 +189,7 @@ class SchellenbergUsbApi:
                     self._device_version,
                     self._device_mode,
                 )
-                if self._verify_future and not self._verify_future.done():
-                    self._verify_future.set_result(True)
+                self._safe_resolve_future(self._verify_future, True)
                 self._update_status()
             return
 
@@ -213,8 +213,7 @@ class SchellenbergUsbApi:
         if message.startswith("sr") and len(message) >= 8:
             device_id = message[2:8]
             _LOGGER.debug("Received device ID response: %s", device_id)
-            if self._device_id_future and not self._device_id_future.done():
-                self._device_id_future.set_result(device_id)
+            self._safe_resolve_future(self._device_id_future, device_id)
             return
 
         # Handle pairing/list responses (format: sl00BEXXXXXX...)
@@ -243,7 +242,7 @@ class SchellenbergUsbApi:
             # because the user is explicitly trying to pair RIGHT NOW
             if self._pairing_future and not self._pairing_future.done():
                 _LOGGER.info("Pairing successful! New device ID: %s", device_id)
-                self._pairing_future.set_result(device_id)
+                self._safe_resolve_future(self._pairing_future, device_id)
                 # Stop pairing mode after a 2 second delay to ensure device has fully paired
                 self._stop_pairing_task = asyncio.create_task(
                     self._stop_pairing_mode(delay=True)
@@ -279,7 +278,7 @@ class SchellenbergUsbApi:
                 if self._pairing_future and not self._pairing_future.done():
                     if device_id not in self._registered_devices:
                         _LOGGER.info("Pairing successful! New device ID: %s", device_id)
-                        self._pairing_future.set_result(device_id)
+                        self._safe_resolve_future(self._pairing_future, device_id)
                         # Stop pairing mode after a 2 second delay to ensure device has fully paired
                         self._stop_pairing_task = asyncio.create_task(
                             self._stop_pairing_mode(delay=True)
@@ -401,6 +400,9 @@ class SchellenbergUsbApi:
             await self.send_command(pair_command)
         except TimeoutError:
             _LOGGER.warning("Pairing timeout - no device responded with ID")
+            return None
+        except ConnectionError:
+            _LOGGER.warning("Pairing aborted - serial port disconnected")
             return None
         else:
             # Pairing successful - return the device ID and enum
@@ -539,11 +541,33 @@ class SchellenbergUsbApi:
         except TimeoutError:
             _LOGGER.error("Device verification timeout - device did not respond to !?")
             return False
+        except ConnectionError:
+            _LOGGER.warning("Device verification aborted - serial port disconnected")
+            return False
         else:
             _LOGGER.info("Device verification successful")
             return result
         finally:
             self._verify_future = None
+
+    def _safe_resolve_future(
+        self,
+        future: asyncio.Future | None,
+        result: object = None,
+        *,
+        exception: BaseException | None = None,
+    ) -> None:
+        """Resolve a future safely, ignoring already-done futures.
+
+        Guards against asyncio.InvalidStateError from double-resolution
+        (e.g. a late serial frame landing in the same tick as a disconnect).
+        """
+        if future is None or future.done():
+            return
+        if exception is not None:
+            future.set_exception(exception)
+        else:
+            future.set_result(result)
 
     @callback
     def _update_status(self) -> None:
@@ -553,6 +577,13 @@ class SchellenbergUsbApi:
     def update_connection_status(self, connected: bool) -> None:
         """Update connection status (called from protocol)."""
         self._is_connected = connected
+        if not connected:
+            # Fail all pending futures immediately so suspended flows return
+            # within seconds instead of hanging for the full timeout (D-10).
+            err = ConnectionError("Serial port disconnected")
+            self._safe_resolve_future(self._pairing_future, exception=err)
+            self._safe_resolve_future(self._verify_future, exception=err)
+            self._safe_resolve_future(self._device_id_future, exception=err)
         self._update_status()
 
     @property
@@ -706,9 +737,14 @@ class SchellenbergUsbApi:
             await self.send_command(CMD_GET_DEVICE_ID)
 
             # Wait for device ID response with timeout
-            device_id = await asyncio.wait_for(self._device_id_future, timeout=5)
+            device_id = await asyncio.wait_for(
+                self._device_id_future, timeout=DEVICE_ID_TIMEOUT
+            )
         except TimeoutError:
             _LOGGER.error("Device ID request timeout - device did not respond")
+            return None
+        except ConnectionError:
+            _LOGGER.warning("Device ID request aborted - serial port disconnected")
             return None
         else:
             _LOGGER.info("Device ID retrieved successfully: %s", device_id)
