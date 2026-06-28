@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Device pairing now assigns the lowest free address slot and shows a clear "device limit reached" error when every slot is in use, so re-pairing can no longer silently overwrite an existing motor.
+- Automatic recovery from a frozen USB stick: a periodic heartbeat detects a stick that is still "connected" but has stopped responding and reconnects on its own, so motors keep working without restarting Home Assistant.
+
+### Changed
+
+- After the USB stick is unplugged or the serial port disappears, reconnection now backs off gradually (about 5 seconds up to 5 minutes) instead of retrying every 5 seconds, sharply reducing log noise.
 
 ### Fixed
 
@@ -29,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - A late radio frame arriving as the stick disconnects no longer causes an internal error.
 - A pairing task could keep running after the stick disconnected; it is now cancelled cleanly.
 - Completed the German, Spanish, and French translations for the manual device-add errors and the timed-calibration screens (previously shown in English or as raw text keys).
+- Commands issued while the stick is briefly busy are now retried in their original order through a bounded queue, so a burst of open/close/stop commands can no longer be dropped or reordered.
 
 ## [1.0.0] - 2026-06-27
 
