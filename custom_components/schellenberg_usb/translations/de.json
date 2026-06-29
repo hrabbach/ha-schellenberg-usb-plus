@@ -184,5 +184,18 @@
       "name": "Gerät koppeln",
       "description": "Aktivieren Sie den Kopplungsmodus am Schellenberg USB-Stick, um einen neuen Rollladenmotor zu koppeln. Drücken Sie nach dem Aufrufen dieses Dienstes innerhalb von 10 Sekunden die Kopplungstaste an Ihrem Rollladenmotor."
     }
+  },
+  "issues": {
+    "uncalibrated_motor": {
+      "title": "{device_name} verwendet die Standard-Fahrzeit",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "{device_name} kalibrieren",
+            "description": "**{device_name}** wurde noch nicht kalibriert und verwendet eine Standard-Fahrzeit von 60 Sekunden — die Positionsanzeige kann ungenau sein.\n\nZur Kalibrierung: **Einstellungen → Geräte & Dienste → Schellenberg USB**, Gerät auswählen, **Konfigurieren** klicken und die Kalibrierungsschritte befolgen."
+          }
+        }
+      }
+    }
   }
 }
