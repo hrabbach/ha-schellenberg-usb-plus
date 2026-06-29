@@ -451,5 +451,5 @@ async def test_register_remote_idempotent_on_readd(hass: HomeAssistant) -> None:
     # Exactly ONE entry for REM001 in _remote_to_motor — no stale duplicate
     assert "REM001" in api._remote_to_motor
     assert len([k for k in api._remote_to_motor if k == "REM001"]) == 1
-    # Must map to the correct motor
-    assert api._remote_to_motor["REM001"] == ("MOT001", "10")
+    # Must map to the correct motor (dict[str, str]: remote_id -> motor_id)
+    assert api._remote_to_motor["REM001"] == "MOT001"
