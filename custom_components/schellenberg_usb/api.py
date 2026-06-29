@@ -46,14 +46,17 @@ from .const import (
     HEARTBEAT_INTERVAL,
     HEARTBEAT_MISS_THRESHOLD,
     HEARTBEAT_TRAFFIC_WINDOW,
+    LEARN_REMOTE_TIMEOUT,
     MAX_DEVICE_ENUM,
     PAIRING_DEVICE_ENUM_START,
     PAIRING_TIMEOUT,
     RECONNECT_BACKOFF_BASE,
     RECONNECT_BACKOFF_CAP,
+    REMOTE_DEDUP_WINDOW,
     RETRY_DELAY,
     RETRY_QUEUE_CAP,
     SIGNAL_DEVICE_EVENT,
+    SIGNAL_REMOTE_EVENT,
     SIGNAL_STICK_STATUS_UPDATED,
     VERIFY_TIMEOUT,
 )
@@ -109,6 +112,15 @@ class SchellenbergUsbApi:
 
         # Hub options (live-applied from entry.options by __init__.py)
         self._ignore_unknown: bool = False
+
+        # Remote coexistence (v1.3)
+        # reverse-lookup: remote_device_id → motor_device_id
+        self._remote_to_motor: dict[str, str] = {}
+        self._learn_remote_future: asyncio.Future[str] | None = None
+        # Incrementor dedup cache: (device_id, incrementor) → loop.time() of last seen
+        self._dedup_cache: dict[tuple[str, str], float] = {}
+        # TimerHandles for dedup quiet-period resets (keyed by (device_id, incrementor))
+        self._dedup_handles: dict[tuple[str, str], asyncio.TimerHandle] = {}
 
     def _compute_reconnect_delay(self) -> float:
         """Return next reconnect delay: truncated exponential backoff, equal jitter.
@@ -372,58 +384,148 @@ class SchellenbergUsbApi:
             try:
                 device_enum = message[2:4]
                 device_id = message[4:10]
-                # Skip message incrementor at positions 10:14
+                incrementor = message[10:14]
                 command = message[14:16]
 
                 _LOGGER.debug(
-                    "Parsed: enum=%s, id=%s, cmd=%s", device_enum, device_id, command
+                    "Parsed: enum=%s, id=%s, incr=%s, cmd=%s",
+                    device_enum, device_id, incrementor, command,
                 )
 
-                # If we're in pairing mode and this is a new device
+                # [GATE 1] — pairing-future: unchanged from existing code
+                # Gate 1 intentionally PRECEDES Gate 2 (dedup): the pairing
+                # path captures a new device ID on the first frame and is
+                # therefore NOT dedup-suppressed. This ordering is by design
+                # (HA opens one pairing window at a time and the user is
+                # deliberately pairing) and is not "corrected" later — do not
+                # move dedup ahead of it (WR-04).
                 if self._pairing_future and not self._pairing_future.done():
                     if device_id not in self._registered_devices:
-                        _LOGGER.info("Pairing successful! New device ID: %s", device_id)
+                        _LOGGER.info(
+                            "Pairing successful! New device ID: %s", device_id
+                        )
                         self._safe_resolve_future(self._pairing_future, device_id)
-                        # Stop pairing mode after a 2 second delay to ensure device has fully paired
+                        # Stop pairing mode after a 2 second delay to ensure
+                        # device has fully paired
                         self._stop_pairing_task = asyncio.create_task(
                             self._stop_pairing_mode(delay=True)
                         )
                         self._stop_pairing_task.add_done_callback(
                             lambda _: setattr(self, "_stop_pairing_task", None)
                         )
-                        # Don't send dispatcher signal here - let the caller handle persistence
+                        # Don't send dispatcher signal — let the caller handle
                         return
 
-                # If this is the first time we see this device (auto-discovery mode)
-                if device_id not in self._registered_devices:
-                    if self._ignore_unknown:
-                        # "Ignore unknown signals" hub option is on — demote the
-                        # unknown-device line to DEBUG to keep logs quiet (SIG-01).
+                # Compute-once: remote routing discriminator + dedup-scope flags
+                motor_id = self._remote_to_motor.get(device_id)
+                is_remote = motor_id is not None
+                is_learning = (
+                    self._learn_remote_future is not None
+                    and not self._learn_remote_future.done()
+                )
+
+                # [GATE 2] — incrementor dedup (RMT-06)
+                # Scoped to remote/learning frames only (review finding #1):
+                # a registered MOTOR frame skips this gate entirely and is
+                # never suppressed, even if it reuses an incrementor.
+                if is_remote or is_learning:
+                    dedup_key = (device_id, incrementor)
+                    now = self.hass.loop.time()
+                    cached_time = self._dedup_cache.get(dedup_key)
+                    # The dedup window is intentionally anchored to the FIRST
+                    # frame of a burst (NOT a sliding window): a suppressed
+                    # repeat does NOT refresh the timestamp or reschedule the
+                    # reset timer below. A same-incrementor repeat that arrives
+                    # after REMOTE_DEDUP_WINDOW is treated as a NEW press by
+                    # design (covers a normal ~0.5s 9-frame burst). Do not
+                    # convert this to a sliding window (WR-02).
+                    if (
+                        cached_time is not None
+                        and (now - cached_time) < REMOTE_DEDUP_WINDOW
+                    ):
                         _LOGGER.debug(
-                            "Ignoring signal from unknown device %s (enum=%s, cmd=%s)",
-                            device_id,
-                            device_enum,
-                            command,
+                            "Dedup: suppressing RF repeat from %s"
+                            " incr=%s (%.3fs ago)",
+                            device_id, incrementor, now - cached_time,
+                        )
+                        return
+                    old_handle = self._dedup_handles.pop(dedup_key, None)
+                    if old_handle is not None:
+                        old_handle.cancel()
+                    self._dedup_cache[dedup_key] = now
+
+                    def _reset_dedup_entry(
+                        key: tuple[str, str] = dedup_key,
+                    ) -> None:
+                        self._dedup_cache.pop(key, None)
+                        self._dedup_handles.pop(key, None)
+
+                    self._dedup_handles[dedup_key] = self.hass.loop.call_later(
+                        REMOTE_DEDUP_WINDOW, _reset_dedup_entry
+                    )
+
+                # [GATE 3] — remote routing: triple dispatch (RMT-07)
+                # Reuses motor_id already computed above (no double lookup).
+                if motor_id is not None:
+                    _LOGGER.debug(
+                        "Remote %s → motor %s (enum=%s): bridging cmd=%s",
+                        device_id, motor_id, device_enum, command,
+                    )
+                    async_dispatcher_send(
+                        self.hass,
+                        f"{SIGNAL_DEVICE_EVENT}_{device_id}",
+                        command,
+                    )
+                    async_dispatcher_send(
+                        self.hass,
+                        f"{SIGNAL_DEVICE_EVENT}_{motor_id}",
+                        command,
+                    )
+                    async_dispatcher_send(
+                        self.hass,
+                        f"{SIGNAL_REMOTE_EVENT}_{motor_id}",
+                        command,
+                    )
+                    return  # MANDATORY — does not reach final dispatch
+
+                # [GATE 4] — learn-window: resolve future on first unknown device
+                if device_id not in self._registered_devices:
+                    if (
+                        self._learn_remote_future
+                        and not self._learn_remote_future.done()
+                    ):
+                        _LOGGER.info(
+                            "learn_remote_and_wait: captured unknown"
+                            " device %s", device_id
+                        )
+                        self._safe_resolve_future(
+                            self._learn_remote_future, device_id
+                        )
+                        return  # suppress warning while in learn window
+                    if self._ignore_unknown:
+                        # "Ignore unknown signals" hub option on — demote to DEBUG
+                        _LOGGER.debug(
+                            "Ignoring signal from unknown device"
+                            " %s (enum=%s, cmd=%s)",
+                            device_id, device_enum, command,
                         )
                     else:
                         _LOGGER.warning(
-                            "Received message for device %s (enum=%s, cmd=%s) but no "
-                            "corresponding entity found. The device may need to be added "
-                            "to Home Assistant",
-                            device_id,
-                            device_enum,
-                            command,
+                            "Received message for device %s (enum=%s, cmd=%s)"
+                            " but no corresponding entity found. The device"
+                            " may need to be added to Home Assistant",
+                            device_id, device_enum, command,
                         )
                 else:
                     # The entity will handle the event via the dispatcher
                     _LOGGER.debug(
                         "Forwarding event to device %s (enum=%s): command=%s",
-                        device_id,
-                        device_enum,
-                        command,
+                        device_id, device_enum, command,
                     )
 
-                # Forward the event to the correct entity (if it exists)
+                # [EXISTING FINAL DISPATCH — unchanged; reached only for registered
+                #  motors and unknown devices (non-remote, non-learning).
+                #  RMT-07 compliance: remote frames never reach here.]
                 async_dispatcher_send(
                     self.hass, f"{SIGNAL_DEVICE_EVENT}_{device_id}", command
                 )
@@ -697,6 +799,84 @@ class SchellenbergUsbApi:
             "Registered entity for device %s with enum %s", device_id, device_enum
         )
 
+    def register_remote(
+        self, remote_id: str, motor_id: str, motor_enum: str
+    ) -> None:
+        """Register a remote-to-motor binding.
+
+        Called from cover_entity.async_added_to_hass (Phase 12) when subentry
+        carries CONF_REMOTE_ID. Adds the remote to _registered_devices so
+        inbound frames from it are recognized as known (suppressing the
+        unknown-device warning), and populates the reverse-lookup for triple
+        dispatch.
+
+        The remote is stored in _registered_devices with the MOTOR's enum —
+        this suppresses the "unknown device" warning for the remote's own
+        frames without burning a new enum slot (the motor's enum is already
+        present; de-duplication in initialize_next_device_enum's set
+        eliminates the collision). _remote_to_motor is the authoritative
+        discriminator between remote and motor frames; do NOT rely on
+        _registered_devices to tell them apart.
+        """
+        # Observability only (WR-03): warn when an existing remote→motor
+        # binding is overwritten with a DIFFERENT motor, so a misconfig
+        # (re-bind, or a double async_added_to_hass) leaves a log trail.
+        # This does NOT reject or alter the binding — binding policy is
+        # deliberately deferred to Phase 15 (D-07).
+        existing = self._remote_to_motor.get(remote_id)
+        if existing is not None and existing != motor_id:
+            _LOGGER.warning(
+                "Remote %s re-bound from motor %s to %s",
+                remote_id, existing, motor_id,
+            )
+        self._registered_devices[remote_id] = motor_enum
+        self._remote_to_motor[remote_id] = motor_id
+        _LOGGER.debug(
+            "Registered remote %s → motor %s (enum=%s)",
+            remote_id, motor_id, motor_enum,
+        )
+
+    def unregister_remote(self, remote_id: str) -> None:
+        """Remove a remote binding.
+
+        Called from cover_entity.async_will_remove_from_hass (Phase 12).
+        """
+        self._registered_devices.pop(remote_id, None)
+        self._remote_to_motor.pop(remote_id, None)
+        _LOGGER.debug("Unregistered remote %s", remote_id)
+
+    async def learn_remote_and_wait(
+        self, timeout: float = LEARN_REMOTE_TIMEOUT
+    ) -> str | None:
+        """Open a listening window; return the first unknown device_id seen, or None.
+
+        "Unknown" means NOT in _registered_devices (not an enrolled motor,
+        not an already-registered remote). All binding policy (reject
+        already-a-motor, already-bound-elsewhere) lives in Phase 15's flow.
+
+        Returns the raw 6-char hex device_id string, or None on timeout or
+        disconnect.
+        """
+        if self._learn_remote_future and not self._learn_remote_future.done():
+            _LOGGER.warning("learn_remote_and_wait already in progress")
+            return None
+
+        self._learn_remote_future = asyncio.get_running_loop().create_future()
+        try:
+            return await asyncio.wait_for(
+                self._learn_remote_future, timeout=timeout
+            )
+        except TimeoutError:
+            _LOGGER.debug("learn_remote_and_wait: timeout after %.1fs", timeout)
+            return None
+        except ConnectionError:
+            _LOGGER.warning(
+                "learn_remote_and_wait aborted — serial port disconnected"
+            )
+            return None
+        finally:
+            self._learn_remote_future = None
+
     async def verify_device(self, *, heartbeat_probe: bool = False) -> bool:
         """Verify this is a Schellenberg USB stick by sending !? command.
 
@@ -787,6 +967,12 @@ class SchellenbergUsbApi:
             self._safe_resolve_future(self._pairing_future, exception=err)
             self._safe_resolve_future(self._verify_future, exception=err)
             self._safe_resolve_future(self._device_id_future, exception=err)
+            self._safe_resolve_future(self._learn_remote_future, exception=err)
+            # Teardown dedup timers (idempotent — clearing an empty dict is a no-op)
+            for handle in self._dedup_handles.values():
+                handle.cancel()
+            self._dedup_handles.clear()
+            self._dedup_cache.clear()
         else:
             self._is_connected = True
         self._update_status()

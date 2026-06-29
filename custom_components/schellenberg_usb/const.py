@@ -91,6 +91,8 @@ SIGNAL_PAIRING_STARTED = f"{DOMAIN}_pairing_started"
 SIGNAL_PAIRING_TIMEOUT = f"{DOMAIN}_pairing_timeout"
 SIGNAL_STICK_STATUS_UPDATED = f"{DOMAIN}_stick_status_updated"
 SIGNAL_CALIBRATION_COMPLETED = f"{DOMAIN}_calibration_completed"
+SIGNAL_REMOTE_EVENT = f"{DOMAIN}_remote_event"
+# Used as: f"{SIGNAL_REMOTE_EVENT}_{motor_id}"
 
 # Device verification
 VERIFY_TIMEOUT = 5  # seconds to wait for verification response
@@ -141,3 +143,13 @@ HEARTBEAT_MISS_THRESHOLD = 2  # consecutive misses before disconnect — D-07
 # Reconnect backoff
 RECONNECT_BACKOFF_BASE = 5  # seconds — D-09 (same as old fixed delay)
 RECONNECT_BACKOFF_CAP = 300  # seconds — D-09 (~5 minutes max)
+
+# Remote coexistence (v1.3)
+# str | None; 6-char hex device id of the bound remote (subentry data key)
+CONF_REMOTE_ID = "remote_id"
+
+# seconds — quiet period for incrementor dedup (D-01/D-02)
+REMOTE_DEDUP_WINDOW = 1.0
+
+# seconds — learn-window default timeout (not UI-exposed)
+LEARN_REMOTE_TIMEOUT = 30.0
