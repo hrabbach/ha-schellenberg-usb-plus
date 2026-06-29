@@ -231,24 +231,33 @@ _LOGGER.debug(f"Setup entry called for entry: {entry.entry_id}")
 
 ```
 custom_components/schellenberg_usb/
-├── __init__.py                  # Integration setup/teardown, subentry tracking
-├── api.py                       # Serial connection, protocol encoding/decoding,
-│                                # command queue, pairing, device enumeration
-├── config_flow.py               # Initial hub setup (serial port selection)
-├── const.py                     # Constants, type aliases, dispatcher signal names
-├── cover.py                     # Cover entities; position tracking; calibration
-│                                # persistence (HA storage)
-├── options_flow.py              # Hub options (change serial port)
-├── options_flow_calibration.py  # Manual open/close time measurement flow
-├── options_flow_pairing.py      # Device pairing workflow and subentry creation
-├── options_flow_timed_calibration.py  # Timed calibration variant
-├── sensor.py                    # USB stick status sensors
-├── switch.py                    # LED switch entity
-├── manifest.json                # Integration metadata and version
-├── strings.json                 # UI string keys
-└── translations/                # Localized UI strings
+├── __init__.py                       # Integration setup/teardown, subentry tracking
+├── api.py                            # Serial connection, protocol encoding/decoding,
+│                                     # command queue, pairing, device enumeration
+├── config_flow.py                    # Initial hub setup (serial port selection)
+├── const.py                          # Constants, type aliases, dispatcher signal names
+├── cover.py                          # Cover platform setup (async_setup_entry);
+│                                     # imports from .const and HA packages directly;
+│                                     # exposes __all__ for test-patch compatibility
+├── cover_calibration.py              # Calibration storage helpers (HA Store wrapper,
+│                                     # in-memory cache, JSON serialization)
+├── cover_entity.py                   # SchellenbergCover entity; position tracking;
+│                                     # open/close/stop/set-position commands
+├── cover_position.py                 # PositionTracker — pure travel-time/position
+│                                     # math, no HA dependencies
+├── options_flow.py                   # Hub options (change serial port)
+├── options_flow_calibration.py       # Manual open/close time measurement flow
+├── options_flow_pairing.py           # Device pairing workflow and subentry creation
+├── options_flow_timed_calibration.py # Timed calibration variant
+├── repairs.py                        # HA Repairs platform; UncalibratedMotorRepairFlow
+│                                     # directs user to run timed calibration
+├── sensor.py                         # USB stick status sensors
+├── switch.py                         # LED switch entity
+├── manifest.json                     # Integration metadata and version
+├── strings.json                      # UI string keys
+└── translations/                     # Localized UI strings
 
-tests/                           # pytest test suite (WSL only)
+tests/                                # pytest test suite (WSL only)
 ```
 
 For a deeper explanation of how these modules interact see [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -265,8 +274,8 @@ follow the pattern of existing branches visible in `git branch -a`.
 ## PR Process
 
 - Open a PR against `main` on GitHub.
-- Ensure all four quality-gate checks pass locally before requesting review (ruff, ruff
-  format, mypy, pytest).
+- Ensure all quality-gate checks pass locally before requesting review (lint, type
+  check, spell check, tests — see [CONTRIBUTING.md](../CONTRIBUTING.md)).
 - The PR description should explain the motivation for the change and any non-obvious
   implementation decisions.
 - Reviewers check correctness, HA integration conventions, and test coverage.

@@ -56,9 +56,11 @@ integration uses for event-driven state updates.
 SchellenbergUsbConfigFlow (config_flow.py)
 ├── async_step_user          — manual serial port entry
 ├── async_step_usb           — USB auto-discovery (VID 16C0 / PID 05E1)
+├── async_step_usb_confirm   — confirm/edit discovered port
 └── SchellenbergPairingSubentryFlow
     ├── async_step_menu      — pair / manual_add choice
     ├── async_step_pair      — auto-pair via stick
+    ├── async_step_name_device — friendly name after pairing
     ├── async_step_manual_add — enum + mode entry
     ├── async_step_manual_position — initial position for timed motors
     ├── async_step_reconfigure — routes by motor type (bidir vs timed)
@@ -74,11 +76,14 @@ SchellenbergUsbConfigFlow (config_flow.py)
 
 | Module | Class / Function | Responsibility |
 |---|---|---|
-| `api.py` | `SchellenbergUsbApi` | Serial connection lifecycle, command transmission, stick-busy retry queue, device registry (`_registered_devices`), pairing coordination, futures for async serial responses |
+| `api.py` | `SchellenbergUsbApi` | Serial connection lifecycle, command transmission, stick-busy retry queue (`asyncio.Queue`, cap 16), heartbeat worker, exponential-backoff reconnect, device registry (`_registered_devices`), pairing coordination, futures for async serial responses |
 | `api.py` | `SchellenbergProtocol` | `asyncio.Protocol` subclass; buffers incoming bytes, splits on `\n`, dispatches complete lines to `SchellenbergUsbApi._handle_message` |
 | `__init__.py` | `async_setup_entry` | Creates `SchellenbergUsbApi`, stores it in `entry.runtime_data`, bootstraps hub subentry, forwards to platforms, registers `_on_entry_updated` to detect subentry changes |
-| `cover.py` | `SchellenbergCover` | HA `CoverEntity` + `RestoreEntity`; open/close/stop/set-position; position tracking loop (200 ms tick, 1 s HA push); bidirectional vs timed branching; calibration persistence |
-| `cover.py` | `_get_cal_store` / `_save_calibration` | HA `Store` wrapper for `.storage/schellenberg_usb_calibration`; shared across all cover entities via `hass.data` |
+| `cover.py` | `async_setup_entry` | Platform entry-point; loads calibration cache, iterates blind subentries, creates `SchellenbergCover` entities; re-exports `SchellenbergCover`, `_get_cal_store`, `_save_calibration`, `DEFAULT_TRAVEL_TIME` for importers |
+| `cover_entity.py` | `SchellenbergCover` | HA `CoverEntity` + `RestoreEntity`; open/close/stop/set-position; position tracking loop (200 ms tick, 1 s HA push); bidirectional vs timed branching; HA Repairs issue management for uncalibrated timed motors |
+| `cover_calibration.py` | `_get_cal_store` / `_save_calibration` | HA `Store` wrapper for `.storage/schellenberg_usb_calibration`; shared across all cover entities via `hass.data` |
+| `cover_position.py` | `PositionTracker` | Pure, stateless position calculator; owns travel times and the `time.monotonic()`→position math; no HA dependencies |
+| `repairs.py` | `UncalibratedMotorRepairFlow` | HA Repairs platform handler; surfaces a fixable issue for uncalibrated timed motors and directs user to run timed calibration via Configure |
 | `sensor.py` | `SchellenbergBaseSensor` / `SchellenbergConnectionSensor` / `SchellenbergVersionSensor` / `SchellenbergModeSensor` | Expose `api.is_connected`, `api.device_version`, `api.device_mode`; update on `SIGNAL_STICK_STATUS_UPDATED` |
 | `switch.py` | `SchellenbergLedSwitch` | LED on/off/blink by delegating to `api.led_on()` / `api.led_off()` |
 | `config_flow.py` | `SchellenbergUsbConfigFlow` | Hub config flow: manual serial port entry + USB auto-discovery |
@@ -106,15 +111,20 @@ SchellenbergUsbConfigFlow (config_flow.py)
 2. `verify_device()` sends `!?` (`CMD_VERIFY`) and awaits an `RFTU_V*` response via `_verify_future` (timeout: `VERIFY_TIMEOUT` = 5 s).
 3. If mode is not `listening`, a lowercase command (`hello`) is sent to enter listening mode (B:2).
 4. `get_device_id()` sends `sr` (`CMD_GET_DEVICE_ID`) and awaits an `sr{6-char-id}` response via `_device_id_future`.
-5. On `SerialException`/`OSError`, retry is scheduled via `asyncio.get_running_loop().call_later(5, ...)`.
+5. On `SerialException`/`OSError`, `_schedule_reconnect()` is called, which applies exponential backoff with equal jitter (sequence: 5, 10, 20, 40 … 300 s). A single `asyncio.TimerHandle` is stored to prevent fan-out reconnect attempts.
+
+After a successful connect, two background tasks are started:
+
+- **`_retry_worker_task`:** drains `_retry_queue` (bounded `asyncio.Queue`, cap `RETRY_QUEUE_CAP` = 16), re-sending each queued command after `RETRY_DELAY` (0.1 s).
+- **`_heartbeat_task`:** wakes every `HEARTBEAT_INTERVAL` (120 s); skips the probe if traffic occurred within the same window; sends `CMD_VERIFY` as a heartbeat probe. After `HEARTBEAT_MISS_THRESHOLD` (2) consecutive misses, marks disconnected and calls `_schedule_reconnect()`.
 
 ### Message parsing (`api.py:SchellenbergUsbApi._handle_message`)
 
 | Prefix | Format | Action |
 |---|---|---|
 | `RFTU_` | `RFTU_V20 F:<date> B:<mode>` | Sets `_device_version`, `_device_mode`; resolves `_verify_future`; fires `SIGNAL_STICK_STATUS_UPDATED` |
-| `t1` / `t0` | — | Transmit ACK; ignored |
-| `tE` | — | Stick busy; schedules `_retry_command_after_delay()` (100 ms) to resend `_pending_retry_command` |
+| `t1` / `t0` | — | Transmit ACK; clears `_in_flight_command`; ignored otherwise |
+| `tE` | — | Stick busy; clears `_in_flight_command`, enqueues it into `_retry_queue` (drops with warning if queue is full) |
 | `sr{6}` | `sr5D3E7C` | Device ID response; resolves `_device_id_future` |
 | `sl{...}` | `sl00BE{6-char-id}...` | Pairing/list response; device ID extracted at `[6:12]` (requires `len >= 12`); resolves `_pairing_future` during pairing |
 | `ss{...}` | `ss{enum:2}{device_id:6}{incr:4}{cmd:2}{pad:2}{rssi:2}` | Inbound device event (requires `len >= 18`); device enum at `[2:4]`, device ID at `[4:10]`, command at `[14:16]`; dispatches `SIGNAL_DEVICE_EVENT_{device_id}` |
@@ -205,13 +215,16 @@ without the key are treated as bidirectional.
   If no prior state exists, position defaults to 100% (assume open).
 - Calibration uses `TimedCalibrationFlowHandler` — event-free, pure form-button
   timing (see Calibration section below).
+- Uncalibrated timed motors surface a fixable HA Repairs issue (`repairs.py`) on
+  `async_added_to_hass`; the issue is cleared automatically on calibration completion
+  or when the motor subentry is removed.
 
-### Position tracking loop (`cover.py:SchellenbergCover._async_position_update_loop`)
+### Position tracking loop (`cover_entity.py:SchellenbergCover._async_position_update_loop`)
 
 Both motor types share the same loop once movement starts:
 
 1. Wakes every 200 ms (`asyncio.sleep(0.2)`).
-2. Calls `_update_position()`: `new_pos = start_pos ± (elapsed / travel_time) * 100`.
+2. Delegates to `PositionTracker.calculate()` (`cover_position.py`): `new_pos = start_pos ± (elapsed / travel_time) * 100`.
 3. If `_target_position` is set and the computed position reaches it:
    - Sends `CMD_STOP` if target is not 0 or 100 (endstops auto-stop).
    - Clears all movement state.
@@ -250,10 +263,9 @@ Calibration data (open and close travel times in seconds) is stored in
 
 ### Save path
 
-- **Bidirectional path:** `CalibrationFlowHandler._save_calibration_data` writes to
-  the legacy `schellenberg_usb_devices` Store and then dispatches
-  `SIGNAL_CALIBRATION_COMPLETED`. The cover's `_handle_calibration_completed`
-  callback calls `_save_calibration` to also write to the calibration Store.
+- **Bidirectional path:** `CalibrationFlowHandler._save_calibration_data` calls
+  `_save_calibration` (imported lazily from `cover.py`) to persist to the calibration
+  Store, then dispatches `SIGNAL_CALIBRATION_COMPLETED` with `final_position=0`.
 - **Timed path:** `TimedCalibrationFlowHandler._emit_calibration_signal` first
   `await`s `_save_calibration` (imported lazily from `cover.py`) to persist calibration
   to the Store synchronously, then dispatches `SIGNAL_CALIBRATION_COMPLETED`. This
@@ -325,17 +337,28 @@ the blocking `serial.Serial(port)` call, dispatched to the executor via
 intentional (documented in both files with `# NOTE: blocking open used only to
 sanity-check connectivity`) and safe because it runs off-loop.
 
-### Device enumerators are allocated sequentially
+### Device enumerators are allocated by lowest-free-slot scan
 
-`api.initialize_next_device_enum()` scans `_registered_devices.values()` for the
-highest existing hex enum and adds 1. Enumerators start at `PAIRING_DEVICE_ENUM_START`
-(0x10) and are capped at 0xFF with wrap-around.
+`api.initialize_next_device_enum()` scans `_registered_devices.values()` and returns
+the lowest unused hex slot in the range `PAIRING_DEVICE_ENUM_START` (0x10) through
+`MAX_DEVICE_ENUM` (0xFF) inclusive (240 slots). Freed slots from removed devices are
+reclaimed before allocating from the high-water mark. Returns `None` (never wraps)
+when all 240 slots are occupied; callers raise `DeviceLimitReached`.
 
-### Stick-busy retry
+### Stick-busy retry queue
 
-When the stick responds `tE`, the last command is stored in `_pending_retry_command`
-and re-sent after 100 ms (`asyncio.sleep(0.1)`). Only one pending retry exists at a
-time; a new `tE` cancels any in-flight retry task before scheduling a fresh one.
+When the stick responds `tE`, the in-flight command is cleared from `_in_flight_command`
+and enqueued into `_retry_queue` (bounded `asyncio.Queue`, cap `RETRY_QUEUE_CAP` = 16).
+The `_retry_worker_task` drains the queue, sleeping `RETRY_DELAY` (0.1 s) between
+attempts. Commands beyond the cap are dropped with a warning.
+
+### Reconnect backoff
+
+All reconnect sites (`connect()` failure, `connection_lost`, heartbeat frozen-stick
+detection) funnel through `_schedule_reconnect()`. It uses truncated exponential
+backoff with equal jitter (base 5 s, cap 300 s), stores one `asyncio.TimerHandle`
+in `_reconnect_handle`, and no-ops if a reconnect is already pending or the API
+has been closed (`_closed = True`).
 
 ### Ignore unknown signals
 
@@ -356,17 +379,21 @@ file is retained only because `CalibrationFlowHandler` references
 
 ```
 custom_components/schellenberg_usb/
-├── __init__.py                    — integration setup, subentry tracking
-├── api.py                         — serial layer (SchellenbergUsbApi, SchellenbergProtocol)
-├── config_flow.py                 — hub config + blind subentry flows
-├── const.py                       — DOMAIN, CMD_*, CONF_*, SIGNAL_*, type aliases
-├── cover.py                       — SchellenbergCover entity + calibration store helpers
-├── manifest.json                  — integration metadata, pyserial-asyncio-fast dependency
-├── options_flow.py                — hub options (serial port, ignore_unknown toggle)
-├── options_flow_calibration.py    — event-driven calibration (bidirectional motors)
-├── options_flow_pairing.py        — PairingFlowHandler (legacy, currently unreachable)
-├── options_flow_timed_calibration.py — button-press timing calibration (timed motors)
-├── sensor.py                      — USB stick status sensors
-├── switch.py                      — LED switch entity
-└── strings.json / translations/   — UI strings for config/options flows
+├── __init__.py                         — integration setup, subentry tracking
+├── api.py                              — serial layer (SchellenbergUsbApi, SchellenbergProtocol)
+├── config_flow.py                      — hub config + blind subentry flows
+├── const.py                            — DOMAIN, CMD_*, CONF_*, SIGNAL_*, type aliases
+├── cover.py                            — platform entry-point; re-exports cover symbols
+├── cover_entity.py                     — SchellenbergCover entity + HA Repairs integration
+├── cover_calibration.py                — _get_cal_store / _save_calibration (Store helpers)
+├── cover_position.py                   — PositionTracker (stateless position math)
+├── manifest.json                       — integration metadata, pyserial-asyncio-fast dependency
+├── options_flow.py                     — hub options (serial port, ignore_unknown toggle)
+├── options_flow_calibration.py         — event-driven calibration (bidirectional motors)
+├── options_flow_pairing.py             — PairingFlowHandler (legacy, currently unreachable)
+├── options_flow_timed_calibration.py   — button-press timing calibration (timed motors)
+├── repairs.py                          — HA Repairs platform (uncalibrated motor fix flow)
+├── sensor.py                           — USB stick status sensors
+├── switch.py                           — LED switch entity
+└── strings.json / translations/        — UI strings for config/options flows
 ```

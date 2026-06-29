@@ -1,246 +1,168 @@
-# Schellenberg USB+ — Home Assistant Integration
+<!-- generated-by: gsd-doc-writer -->
+# Schellenberg USB+
 
-[![GitHub Release](https://img.shields.io/github/release/hrabbach/ha-schellenberg-usb-plus.svg)](https://github.com/hrabbach/ha-schellenberg-usb-plus/releases)
-[![License](https://img.shields.io/github/license/hrabbach/ha-schellenberg-usb-plus.svg)](https://github.com/hrabbach/ha-schellenberg-usb-plus/blob/main/LICENSE)
-![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/hrabbach/ha-schellenberg-usb-plus/build-test.yaml)
+A Home Assistant custom integration that controls Schellenberg roller-shutter motors through a Schellenberg USB Funk-Stick. Exposes each paired motor as a standard HA cover entity with time-based position tracking, plus USB stick status sensors and an LED switch.
+
+[![HACS Custom Repository](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hrabbach/ha-schellenberg-usb-plus)
+[![GitHub Release](https://img.shields.io/github/v/release/hrabbach/ha-schellenberg-usb-plus)](https://github.com/hrabbach/ha-schellenberg-usb-plus/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 > Based on the original work by [Scott Downing (GimpArm)](https://github.com/GimpArm/schellenberg_usb),
 > with calibration persistence introduced by
 > [ohlmannmichael-ai](https://github.com/ohlmannmichael-ai/schellenberg_usb).
 
-Home Assistant component that interfaces with the [Schellenberg Usb Funk-Stick](https://www.schellenberg.de/smart-home-produkte/smart-home-steuerzentralen/funk-stick/21009/).
+> **Warning:** This integration is not affiliated with Schellenberg. The developers take no responsibility for anything that happens to your devices as a result of using this software.
 
-> [!WARNING] 
-> This integration is not affiliated with Schellenberg, the developers take no responsibility for anything that happens to
-> your devices because of this library.
+---
 
-![Schellenberg](https://raw.githubusercontent.com/hrabbach/ha-schellenberg-usb-plus/main/images/schellenberg-logo.png)
+## What It Does
 
-## Features
+- Controls Schellenberg roller-shutter motors over RF via the Schellenberg USB Funk-Stick
+- Supports **bidirectional motors** (ROLLODRIVE PREMIUM and similar) that send movement events back to the stick — position tracking is event-driven
+- Supports **timed (non-bidirectional) motors** that never confirm movement — position tracking is purely time-based using pre-measured travel times
+- **Time-based position tracking** — open/close times measured via a built-in calibration flow; drive-to-percentage works on any calibrated motor
+- **Auto-pairing** — put the stick into pairing mode from the HA UI; press the pairing button on the motor within 2 minutes
+- **Manual add** — add motors already paired by other remotes, or non-bidirectional motors, by entering their two-character hex enumerator slot
+- **USB auto-discovery** — HA detects the stick on plug-in (USB VID `16C0` / PID `05E1`, manufacturer `van ooijen`) and pre-fills the serial port
+- **Stick status sensors** — connection status, firmware version, and operating mode
+- **LED switch** — toggle the USB stick LED on/off from HA
+- Local control only — no cloud dependency (`iot_class: local_push`)
+- Up to 240 device slots per stick (enumerators `0x10`–`0xFF`)
 
-* Supports blind movement Up, Down, and Stop
-* After calibation, position tracking is possible.
+---
+
+## Requirements
+
+- **Home Assistant** 2025.1.0 or later
+- **Schellenberg USB Funk-Stick** (USB VID `16C0` / PID `05E1`, manufacturer `van ooijen`) connected to the HA host
+- Serial port access — the HA host user must be able to open the serial device (typically `/dev/ttyUSB0` or `/dev/ttyACM0` on Linux)
+- **HACS** (for the recommended install path)
+
+---
 
 ## Installation
 
-### Step 1: Download files
+### Via HACS (recommended)
 
-#### Option 1: Via HACS
+This integration is a custom HACS repository. Add it once, then install as usual:
+
+1. Open HACS in your Home Assistant sidebar.
+2. Click the **three-dot menu** (top right) and choose **Custom repositories**.
+3. Enter `hrabbach/ha-schellenberg-usb-plus` as the repository and select **Integration** as the category. Click **Add**.
+4. Search for **Schellenberg USB+** in the HACS list, select it, and click **Download**.
+5. Restart Home Assistant when prompted.
+
+Or use the one-click badge:
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=hrabbach&repository=ha-schellenberg-usb-plus&category=integration)
 
-Make sure you have HACS installed. If you don't, run `wget -O - https://get.hacs.xyz | bash -` in HA.  
-Choose Integrations under HACS. Click the '+' button on the bottom of the page, search for "Schellenberg USB+", choose it, and click install in HACS.
+### Manual install
 
-#### Option 2: Manual
-Clone this repository or download the source code as a zip file and add/merge the `custom_components/` folder with its contents in your configuration directory.
+Copy the `custom_components/schellenberg_usb/` folder from this repository into your HA `config/custom_components/` directory, then restart Home Assistant.
 
+---
 
-### Step 2: Restart HA
-In order for the newly added integration to be loaded, HA needs to be restarted.
+## Quick Setup
 
-### Step 3: Add integration to HA (<--- this is a step that a lot of people forget)
-In HA, go to Configuration > Integrations.
-In the bottom right corner, click on the big button with a '+'.
+1. Go to **Settings → Devices & Services → Add Integration** and search for **Schellenberg USB+**.
+2. If the stick is already plugged in, HA may auto-discover it and pre-fill the serial port — confirm it. Otherwise, enter the port path (e.g. `/dev/ttyUSB0`).
+3. Go to the newly created **Schellenberg USB+** hub and click **+ Add device**.
+4. Choose **Pair automatically** or **Add manually** (for already-paired or timed motors).
+5. Calibrate the motor from its device page to enable position tracking.
 
-If the component is properly installed, you should be able to find 'Schellenberg USB+' in the list. You might need to clear you browser cache for the integration to show up.
+Full step-by-step instructions, including calibration and troubleshooting, are in [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
 
-Select it, and the Schellenberg USB+ integration is ready for use.
-
-### Step 4: Pair your devices
-
-1. In Home Assistant, go to **Settings > Devices & Services**
-2. Find the **Schellenberg USB+** integration and click on it
-3. Click the **+** button or select **Pair device** from the menu
-4. Put your blind motor into pairing mode (see [Device Pairing Instructions](#device-pairing-instructions))
-5. Once pairing is successful, provide a friendly name for your blind
-
-### Step 5: Calibrate your blinds
-
-Calibration is essential for accurate position tracking. The integration measures how long it takes your blind to fully open and close, allowing it to calculate the current position during operation.
-
-> [!IMPORTANT]
-> This calibration is **not** the same as setting the end positions (fully open/closed limits) on your blind motor. End positions must be configured directly on the device itself using the motor's built-in adjustment features or a Schellenberg remote control before using this integration.
-
-#### Starting Calibration
-
-You can calibrate a blind:
-- **During initial pairing**: After naming your device, you'll be prompted to calibrate
-- **After pairing from the device page**: Go to the device and click the **Calibrate** gear icon (⚙️) as shown below
-
-![Calibrate button location](images/calibrate-button.png)
-
-*Click the gear icon labeled "Calibrate" in the top right corner of your blind device to start calibration.*
-
-#### Calibration Steps
-
-1. **Step 1 - Close the blind**: Ensure your blind is fully closed (all the way down). Press **Next** when ready.
-
-2. **Step 2 - Measure open time**: 
-   - Press **Start** in the dialog
-   - Then press the **open button** on your physical remote/control
-   - The integration will automatically detect when the blind starts moving and begin timing
-   - Wait for the blind to fully open - the timer stops automatically when movement stops
-
-3. **Step 3 - Measure close time**:
-   - Press **Start** in the dialog  
-   - Then press the **close button** on your physical remote/control
-   - The integration will automatically detect when the blind starts moving and begin timing
-   - Wait for the blind to fully close - the timer stops automatically when movement stops
-
-4. **Complete**: The integration will display the measured open and close times and save them for position tracking
-
-> [!TIP]
-> There's no need to rush when pressing the buttons - the timer doesn't start until the integration receives a "moving" signal from the blind motor.
-
-> [!NOTE]
-> If calibration times seem incorrect, you can recalibrate at any time from the device options.
+---
 
 ## Device Pairing Instructions
 
-Each Schellenberg device has a specific button combination to enter pairing mode. You must put your device into pairing mode within 2 minutes of starting the pairing process in Home Assistant.
+When you choose **Pair automatically** in the HA UI, the integration signals the USB stick to accept the next RF registration frame. You must also press the pairing button on the motor itself within 2 minutes.
 
-### ROLLODRIVE 65 PREMIUM / 75 PREMIUM (Electric Belt Winders)
+The exact button combination varies by motor model:
+
+### ROLLODRIVE 65 PREMIUM / 75 PREMIUM (electric belt winders)
 **Art.Nr.: 22567, 22576, 22578, 22726, 22727, 22728, 22767**
 
-To enter pairing mode:
-1. Press and hold the **Sun (☀)** button and the **Up (▲)** button simultaneously
-2. Hold for **5 seconds** until the LED flashes
-3. The device is now in pairing mode
+1. Press and hold the **Sun (☀)** button and the **Up (▲)** button simultaneously.
+2. Hold for **5 seconds** until the LED flashes.
+3. The motor is now in pairing mode — it accepts the next registration frame from the stick.
 
-### ROLLOPOWER PLUS / STANDARD (Tube Motors)
+### ROLLOPOWER PLUS / STANDARD (tube motors)
 **Art.Nr.: 20106, 20110, 20406, 20410, 20610, 20615, 20620, 20640, 20710, 20720, 20740**
 
-These motors are controlled via external switches or remote controls. Pairing is typically done through the connected Schellenberg remote control or timer switch.
+Pairing is performed through the motor's connected Schellenberg remote or wall switch. Consult the remote's printed quick-start card for the pairing button sequence.
 
-### Funk-Rollladenmotoren PREMIUM (Radio Tube Motors)
+### Funk-Rollladenmotoren PREMIUM (radio tube motors)
 **Art.Nr.: 21106, 21110, 21210, 21220, 21240**
 
-To enter pairing mode, refer to your specific remote control or timer switch manual. The pairing button combination varies by the control device used.
+Pairing is driven by the connected control device (remote or timer switch). Refer to that device's manual for the exact sequence.
 
-### General Tips
+### Non-bidirectional (timed) motors
 
-- Keep the USB Funk-Stick within range (approx. 20m indoors, 100m outdoors)
-- Avoid metal obstructions between the stick and the motor
-- If pairing fails, try moving the USB stick closer to the device
-- Consult your device's manual for the exact pairing procedure if the above doesn't work
+Motors in this category never send a pairing response. Use **Add manually** instead of **Pair automatically** and enter the motor's two-character hex enumerator slot directly.
 
-> [!NOTE]
-> The pairing instructions above are based on common Schellenberg products. Your specific device may have different procedures - always refer to the device's original manual if unsure.
+### General tips
 
----
+- Keep the USB Funk-Stick within range (approximately 20 m indoors).
+- Avoid metal obstructions between the stick and the motor.
+- If pairing times out, move the stick closer and try again.
+- If the model above does not match your motor, consult the printed instruction sheet included with the motor or the Schellenberg support site.
 
-## Motor Types: Bidirectional vs Timed (Non-Bidirectional)
-
-As of v1.3.0, the integration distinguishes between two motor types:
-
-| Type | Description |
-|------|-------------|
-| **Bidirectional** | Motor sends movement events back to the stick. The integration detects when motion starts and stops — this is the classic mode. All previously paired motors are treated as bidirectional by default. |
-| **Timed (non-bidirectional)** | Motor gives no movement feedback. The integration cannot detect when the motor starts or stops moving, so it times runs by measuring the wall-clock duration between button presses instead of waiting for events. |
-
-You select the motor type once, when adding the device. A timed motor requires a separate calibration flow (described below); a bidirectional motor uses the event-based flow documented in [Step 5: Calibrate your blinds](#step-5-calibrate-your-blinds).
-
-> [!NOTE]
-> Legacy subentries created before v1.3.0 have no mode flag and are treated as bidirectional — existing paired motors are unaffected.
+> **Note:** The integration is model-agnostic — it only needs to receive the motor's RF registration frame. Any model that emits a compatible Schellenberg pairing frame will work.
 
 ---
 
-## Adding an Already-Paired Motor Manually
+## Motor Types: Bidirectional vs Timed
 
-If a motor is already paired (for example it responds to an existing Schellenberg remote) you can add it to Home Assistant without triggering the radio-pairing procedure:
+| Type | How it works | Position tracking |
+|------|-------------|-------------------|
+| **Bidirectional** | Motor reports `started moving` and `stopped` events back to the stick | Event-driven — the integration starts and stops the timer automatically |
+| **Timed (non-bidirectional)** | Motor gives no movement feedback | Time-based — the integration drives the motor and measures elapsed time between your button presses during calibration |
 
-1. In Home Assistant, go to **Settings > Devices & Services**.
-2. Find the **Schellenberg USB+** integration and click on it.
-3. Click the **+** button to add a device.
-4. When the menu appears, choose **Add manually**.
-5. Enter the motor's **device enum** — a two-character hex value (e.g. `10`, `11`, `1A`) that identifies the device on the radio bus.
-6. Choose the **motor mode**: toggle on for bidirectional, toggle off for timed/non-bidirectional.
-7. Optionally provide a friendly name (defaults to `Blind <enum>` if left blank).
-8. For **timed motors only**: a second screen asks for the **initial position** (0–100 %). Set this to the motor's current physical position so the integration starts tracking from the right point. Use 100 % if the shutter is currently fully open.
-9. Click **Submit** — the device is created immediately with no radio-pairing step.
-
-> [!TIP]
-> The device enum is the two-hex-character address the stick uses to address the motor. If you are unsure of the value, check your previous pairing records or consult the integration logs — each enrolled device is logged with its enum at startup.
+You select the motor type once when adding the device. Existing motors added before this distinction was introduced are treated as bidirectional.
 
 ---
 
-## Timed Calibration (for Non-Bidirectional Motors)
+## Entities Created
 
-> [!IMPORTANT]
-> This section describes the **timed calibration flow** for non-bidirectional (timed) motors. It is separate from and additional to the event-based "Calibration Steps" in [Step 5](#step-5-calibrate-your-blinds), which applies only to bidirectional motors. Do not use the event-based flow for a timed motor — it will wait indefinitely for movement events that never arrive.
+For each USB stick (hub):
 
-Because timed motors send no movement feedback, calibration is driven entirely by button presses: the integration sends a command, you watch the shutter move, and you press a button when it stops.
+| Entity type | Name | Description |
+|-------------|------|-------------|
+| Sensor | Connection status | Whether the serial connection to the stick is active |
+| Sensor | Firmware version | Stick firmware version string |
+| Sensor | Operating mode | Current stick operating mode |
+| Switch | LED | Toggles the USB stick LED on or off |
 
-#### Prerequisites
+For each paired motor (subentry):
 
-- The shutter must be **fully open** (all the way up) before you start. If it is not, drive it to the top using your physical remote first.
-
-#### Starting Timed Calibration
-
-Access timed calibration the same way as regular calibration:
-
-- **After adding a timed motor**: the timed calibration flow launches automatically once the device is created.
-- **Later, from the device page**: click the **Calibrate** gear icon (⚙️) on the device page.
-
-#### Timed Calibration Steps
-
-1. **Precondition check**: Confirm the shutter is fully open. Press **Next** when ready — no command is sent at this point.
-
-2. **Close run**:
-   - The integration sends a **close** command to the motor.
-   - Watch the shutter travel all the way down to its physical endstop. Wait until it has fully stopped.
-   - Press **Next** to record the elapsed time.
-   - The integration does **not** send a stop command — the motor coasts to its physical endstop naturally.
-
-3. **Open run**:
-   - The integration sends an **open** command to the motor.
-   - Watch the shutter travel all the way up. Wait until it has fully stopped at the top endstop.
-   - Press **Next** to record the elapsed time.
-   - Again, no stop command is sent — the motor stops at its physical endstop.
-
-4. **Confirm**: The integration shows the measured close time and open time. Press **Done** to save, or check **Redo** to discard the measurements and start again from the precondition step.
-
-#### Guard Limits
-
-The integration validates each run before accepting it:
-
-| Condition | Guard | What to do |
-|-----------|-------|------------|
-| You pressed Next in under **2 seconds** | Rejected (likely a double-press or misfire) | The form re-shows; drive the shutter back to fully open manually and retry |
-| You waited more than **120 seconds** | Rejected ("walked away" run) | The form re-shows; drive the shutter back to fully open manually and retry |
-
-> [!IMPORTANT]
-> After a guard error, the shutter position is unknown — it may have stopped mid-travel. Return the shutter to the **fully open** position using your physical remote before pressing Next again.
+| Entity type | Description |
+|-------------|-------------|
+| Cover | Open / close / stop / set position (position tracking requires calibration) |
 
 ---
 
-## Driving a Timed Motor to a Position
+## Documentation
 
-Once a timed motor has been calibrated, the position slider in the Home Assistant UI becomes active. Requesting a percentage (e.g., 50 %) causes the integration to:
-
-1. Determine the direction of travel (open or close) from the current tracked position.
-2. Send the appropriate command to the motor.
-3. Schedule a stop command after the computed fraction of the full-travel time has elapsed.
-
-The integration tracks position by dead-reckoning — it uses the calibrated open and close times to estimate where the shutter is. If the motor is ever moved outside of Home Assistant (e.g., by a physical remote), the tracked position will drift until the next full-travel recalibration.
-
----
-
-## Entities Exposed
-
-Each paired blind motor creates one **cover** entity. The USB stick itself creates a set of diagnostic entities grouped under the "Schellenberg USB Stick" device:
-
-| Platform | Entity | Description |
-|----------|--------|-------------|
-| `cover` | Blind (one per paired motor) | Open, close, stop, and set position (0–100 %). Position tracking requires calibration. |
-| `sensor` | Connection Status | Whether the USB stick is currently connected (`Connected` / `Disconnected`). |
-| `sensor` | Firmware Version | Firmware version string reported by the stick. |
-| `sensor` | Operating Mode | Current stick mode (e.g. `Listening`, `Pairing`). |
-| `switch` | LED | Toggles the status LED on the USB stick on or off. State is restored across HA restarts. |
+| Document | Contents |
+|----------|----------|
+| [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) | Full install, pairing, calibration walkthrough, and troubleshooting |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | All configuration fields, calibration constants, protocol details |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design, component map, data flow |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Local dev setup, build commands, code style |
+| [docs/TESTING.md](docs/TESTING.md) | Running tests, coverage, CI integration |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Quality gate commands and contribution guidelines |
 
 ---
 
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup and the local quality gate (tests, lint, type-check, and spell-check) every change must pass.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup and the quality gate (tests, lint, type-check, and spell-check) every change must pass.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE) for details.
+
+Issues and feature requests: [github.com/hrabbach/ha-schellenberg-usb-plus/issues](https://github.com/hrabbach/ha-schellenberg-usb-plus/issues)
