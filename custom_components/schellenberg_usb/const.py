@@ -16,7 +16,7 @@ DOMAIN = "schellenberg_usb"
 type SchellenbergConfigEntry = ConfigEntry[SchellenbergUsbApi]
 
 # Platform for the cover entities
-PLATFORMS = ["cover", "sensor", "switch"]
+PLATFORMS = ["cover", "event", "sensor", "switch"]
 
 # Subentry types
 SUBENTRY_TYPE_LED = "led"
