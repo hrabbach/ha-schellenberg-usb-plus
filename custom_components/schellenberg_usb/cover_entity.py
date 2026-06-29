@@ -32,6 +32,7 @@ from .const import (
     EVENT_STARTED_MOVING_DOWN,
     EVENT_STARTED_MOVING_UP,
     EVENT_STOPPED,
+    REMOTE_DEDUP_WINDOW,
     SIGNAL_CALIBRATION_COMPLETED,
     SIGNAL_DEVICE_EVENT,
     SIGNAL_REMOTE_EVENT,
@@ -546,6 +547,31 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
         frame from a jog (41/42) is acceptable; the loop self-caps at 0/100 via the
         existing boundary check and never requires a timer-based stop (Pitfall P5 / D-03).
         """
+        # WR-12-04: a physical remote press is asynchronous to HA's lifecycle.
+        # A dispatcher callback that races entity removal could invoke this
+        # after teardown has begun — guard against mutating/creating tasks on a
+        # detached entity.  async_on_remove unsubscribes before teardown
+        # completes, so in normal operation self.hass is always set here.
+        if self.hass is None:
+            return
+
+        # WR-12-03: diagnostic for "position jumped on remote press" reports.
+        # _move_start_time is back-dated to the frame-decode instant, so a
+        # delayed dispatch makes the first position sample compute a large
+        # elapsed and visibly jump (worst on short-calibrated motors). Log at
+        # debug when the back-date delta exceeds the dedup window so the jump
+        # is traceable; tracking stays best-effort (no behavioral change).
+        if command in (CMD_UP, CMD_MANUAL_UP, CMD_DOWN, CMD_MANUAL_DOWN):
+            backdate_delta = time.monotonic() - receive_timestamp
+            if backdate_delta > REMOTE_DEDUP_WINDOW:
+                _LOGGER.debug(
+                    "Remote move for %s back-dated by %.3fs (> %.1fs dedup"
+                    " window); first position sample may jump",
+                    self._attr_name,
+                    backdate_delta,
+                    REMOTE_DEDUP_WINDOW,
+                )
+
         if command in (CMD_UP, CMD_MANUAL_UP):
             # CMD_UP (01, tap open) and CMD_MANUAL_UP (41, jog open) both start the
             # open position loop.  D-01/D-02: 41/42 normalisation happens here in
@@ -579,6 +605,21 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
             # D-04: latch the best-effort calculated position via _update_position().
             self._stop_position_tracking()
             self._update_position()
+
+            # WR-12-01: mirror _handle_event's EVENT_STOPPED endstop clamp so
+            # both stop paths finalize identically.  _update_position already
+            # clamps via PositionTracker.calculate, but when a remote STOP
+            # arrives after the position loop has self-capped and cleared
+            # _move_start_time, _update_position early-returns and leaves
+            # _attr_is_closed at whatever the loop last set — this re-derives
+            # the boundary snap and is_closed explicitly.
+            if self._attr_current_cover_position is not None:
+                if self._attr_current_cover_position <= 0:
+                    self._attr_current_cover_position = 0
+                elif self._attr_current_cover_position >= 100:
+                    self._attr_current_cover_position = 100
+                self._attr_is_closed = self._attr_current_cover_position == 0
+
             self._attr_is_opening = False
             self._attr_is_closing = False
             self._move_start_time = None
@@ -602,6 +643,10 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
 
     def _start_position_tracking(self) -> None:
         """Start tracking position updates."""
+        # WR-12-04: defensive guard — never create a background task on a
+        # detached entity (self.hass is None before add / after teardown).
+        if self.hass is None:
+            return
         self._stop_position_tracking()
         self._position_update_task = self.hass.async_create_task(
             self._async_position_update_loop()
