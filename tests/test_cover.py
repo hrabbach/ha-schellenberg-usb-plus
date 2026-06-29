@@ -1860,6 +1860,7 @@ async def test_repair_issue_cleared_on_entity_removal(
             "uncalibrated_motor_AABBCC",
         )
 
+
 @pytest.mark.asyncio
 async def test_timed_restart_no_prior_no_initial_defaults_to_100(
     hass: HomeAssistant,

@@ -514,9 +514,7 @@ async def test_async_step_pair_device_limit_reached_inline_error(
     # Submit the pair form (non-None user_input triggers the pairing logic)
     result = await handler.async_step_pair({})
 
-    assert result["type"] == "form", (
-        f"Expected form result, got {result['type']!r}"
-    )
+    assert result["type"] == "form", f"Expected form result, got {result['type']!r}"
     assert result["step_id"] == "pair", (
         f"Expected step_id='pair', got {result.get('step_id')!r}"
     )

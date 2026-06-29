@@ -335,6 +335,7 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
             from homeassistant.helpers import (  # noqa: PLC0415
                 issue_registry as ir,
             )
+
             ir.async_create_issue(
                 self.hass,
                 DOMAIN,
@@ -402,6 +403,7 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
         # D-07: clear the Repairs issue — motor is now calibrated.
         # async_delete_issue is @callback (same as async_create_issue).
         from homeassistant.helpers import issue_registry as ir  # noqa: PLC0415
+
         ir.async_delete_issue(
             self.hass,
             DOMAIN,
@@ -428,6 +430,7 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
         # (A1 verified: "It is not an error to delete an issue that does not
         # exist.") — safe for calibrated motors or bidirectional motors.
         from homeassistant.helpers import issue_registry as ir  # noqa: PLC0415
+
         ir.async_delete_issue(
             self.hass,
             DOMAIN,

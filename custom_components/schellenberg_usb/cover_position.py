@@ -43,9 +43,7 @@ class PositionTracker:
         flag set returns None — leaving the entity's position unchanged,
         byte-equivalent to cover.py's ``else: return``.
         """
-        travel_time = (
-            self._travel_time_open if is_opening else self._travel_time_close
-        )
+        travel_time = self._travel_time_open if is_opening else self._travel_time_close
 
         # Avoid division by zero
         if not travel_time:

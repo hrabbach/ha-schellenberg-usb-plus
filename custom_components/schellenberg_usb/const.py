@@ -130,14 +130,14 @@ CONF_INITIAL_POSITION = "initial_position"  # int 0-100; timed motors only
 # Phase 8: Async robustness
 
 # Retry queue (replaces single-slot _pending_retry_command)
-RETRY_QUEUE_CAP = 16    # D-01: bounded backlog cap (commands)
-RETRY_DELAY = 0.1       # seconds — same as old 100ms retry delay
+RETRY_QUEUE_CAP = 16  # D-01: bounded backlog cap (commands)
+RETRY_DELAY = 0.1  # seconds — same as old 100ms retry delay
 
 # Frozen-stick heartbeat
-HEARTBEAT_INTERVAL = 120        # seconds — D-06
+HEARTBEAT_INTERVAL = 120  # seconds — D-06
 HEARTBEAT_TRAFFIC_WINDOW = 120  # seconds skip window — D-06/D-08
-HEARTBEAT_MISS_THRESHOLD = 2    # consecutive misses before disconnect — D-07
+HEARTBEAT_MISS_THRESHOLD = 2  # consecutive misses before disconnect — D-07
 
 # Reconnect backoff
-RECONNECT_BACKOFF_BASE = 5    # seconds — D-09 (same as old fixed delay)
-RECONNECT_BACKOFF_CAP = 300   # seconds — D-09 (~5 minutes max)
+RECONNECT_BACKOFF_BASE = 5  # seconds — D-09 (same as old fixed delay)
+RECONNECT_BACKOFF_CAP = 300  # seconds — D-09 (~5 minutes max)
