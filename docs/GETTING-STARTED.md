@@ -56,18 +56,18 @@ Use this when the motor has never been paired to the USB stick and is within rad
 
 1. Choose **Pair automatically**.
 2. Put your motor into pairing mode (see [README — Device Pairing Instructions](../README.md#device-pairing-instructions) for button combinations by model).
-3. Click **Next** in the dialog. The integration signals the stick to accept the next pairing message and waits up to 2 minutes (the pairing timeout) for the motor to respond.
-4. When the motor responds, you are prompted to give it a friendly name. Bidirectional motors proceed straight to calibration (Step 4A). No extra steps needed here.
+3. Click **Pair** in the dialog. The integration signals the stick to accept the next pairing message and waits up to 2 minutes for the motor to respond.
+4. When the motor responds, you are prompted to give it a friendly name. After naming, calibration starts immediately as the next step in the same dialog (Step 4A below).
 
 ### Option B — Manual add (motor is already paired to the stick)
 
 Use this when the motor was paired by hand before you installed this integration, or when the motor never sends events back (non-bidirectional / timed motors).
 
-1. Choose **Add manually**.
-2. Enter the motor's two-character hexadecimal enum (e.g. `10`, `11`, `12`). The enum identifies the slot the motor occupies in the stick's pairing table; check your stick's pairing log or use `10` for the first motor, `11` for the second, and so on. The value is case-insensitive and must be exactly two hex characters.
+1. Choose **Add manually (already paired)**.
+2. Enter the motor's two-character hexadecimal transmit address (enum slot, e.g. `10`, `11`, `1A`). This identifies the slot the motor occupies in the stick's pairing table; check your stick's pairing log or use `10` for the first motor, `11` for the second, and so on. The value is case-insensitive and must be exactly two hex characters.
 3. Choose the motor type:
-   - **Bidirectional** (toggle on, default) — motor sends movement events back to the stick (most ROLLODRIVE PREMIUM motors). Leave this toggled on.
-   - **Timed (non-bidirectional)** (toggle off) — motor never confirms movement; drive-to-position relies on button-press timing.
+   - **Bidirectional motor** (toggle on, default) — motor sends movement events back to the stick (most ROLLODRIVE PREMIUM motors). Leave this toggled on.
+   - **Bidirectional motor** (toggle off) — motor never confirms movement; drive-to-position relies on button-press timing (timed motor).
 4. Optionally enter a friendly name; if left blank, the name defaults to `Blind <enum>`.
 5. For timed motors only: set an **initial position** (0 = fully closed, 100 = fully open) that reflects where the shutter physically is right now. This seeds position tracking until calibration completes.
 
@@ -85,11 +85,11 @@ Calibration records how many seconds the motor takes to travel from fully closed
 
 The integration detects movement automatically — you control the motor with your physical remote during calibration.
 
-1. Open the device page for your motor and click the **Calibrate** (gear) icon.
+1. Open the device page for your motor and click **Calibrate** (or the integration launches calibration automatically right after auto-pairing).
 2. **Step 1 — Close:** Ensure the shutter is fully closed (all the way down), then press **Next**.
-3. **Step 2 — Measure open time:** Press the **open** button on your physical remote. The integration waits for the motor's "started moving up" event and begins timing automatically. Wait for the motor to reach the top endstop and stop. The integration detects the stop event and advances.
-4. **Step 3 — Measure close time:** Press the **close** button on your physical remote. The integration waits for the motor's "started moving down" event and begins timing automatically. Wait for the motor to reach the bottom endstop and stop.
-5. **Complete:** The measured open and close times are displayed. Press **Next** to save.
+3. **Step 2 — Open the blind:** Press **Start** in the dialog, then press the **open** button on your physical remote. The integration waits for the motor's "started moving up" event and begins timing automatically. Wait for the motor to reach the top endstop and stop. The integration detects the stop event and advances.
+4. **Step 3 — Close the blind:** Press **Start** in the dialog, then press the **close** button on your physical remote. The integration waits for the motor's "started moving down" event and begins timing automatically. Wait for the motor to reach the bottom endstop and stop.
+5. **Complete:** The measured open and close times are displayed. Press **Done** to save.
 
 Full model-specific pairing instructions are in [README — Device Pairing Instructions](../README.md#device-pairing-instructions).
 
@@ -97,10 +97,10 @@ Full model-specific pairing instructions are in [README — Device Pairing Instr
 
 The integration drives the motor itself and measures elapsed time between your button presses — no motor events are required.
 
-1. Open the device page for your motor and click the **Calibrate** (gear) icon.
+1. Open the device page for your motor and click **Calibrate**.
 2. **Precondition step:** Confirm that the shutter is fully open (at the top) before proceeding, then press **Next**.
-3. **Close run:** The integration sends a close command automatically. Wait until the motor reaches the bottom endstop and stops on its own, then press **Next**. (Valid travel: 2 – 120 seconds.)
-4. **Open run:** The integration sends an open command automatically. Wait until the motor reaches the top endstop and stops on its own, then press **Next**.
+3. **Close run:** The integration sends a close command automatically. Wait until the motor reaches the bottom endstop and stops on its own, then press **Submit**. (Valid travel: 2 – 120 seconds.)
+4. **Open run:** The integration sends an open command automatically. Wait until the motor reaches the top endstop and stops on its own, then press **Submit**.
 5. **Confirm:** The measured open and close times are shown. Press **Done** to save, or check **Redo** to repeat the measurements.
 
 After calibration the shutter position is set to 100 % (fully open), matching where the motor ended up.
@@ -120,7 +120,7 @@ From this point the entity works like any other HA cover: use it in automations,
 
 ## Recalibrating
 
-If travel times change (motor replaced, mechanical adjustment, etc.), open the motor's device page and click the **Calibrate** gear icon to run calibration again. Existing times are overwritten on confirmation.
+If travel times change (motor replaced, mechanical adjustment, etc.), open the motor's device page and click **Calibrate** to run calibration again. Existing times are overwritten on confirmation.
 
 ---
 
@@ -130,10 +130,11 @@ If travel times change (motor replaced, mechanical adjustment, etc.), open the m
 |---------|--------------|-----|
 | Integration not found after install | HA not restarted, or browser cache | Restart HA; clear browser cache |
 | "Cannot connect" on serial port | Wrong path or permission denied | Verify the path with `ls /dev/tty*`; add the HA user to the `dialout` group |
-| Auto-pair times out | Motor not in pairing mode, out of range, or Next not clicked in time | Put motor in pairing mode first, then click Next in the dialog; move the stick closer if needed |
-| `invalid_enum_format` error on manual add | Enum is not exactly two hex characters | Use values like `10`, `11`, `1A` — no prefix, no spaces |
-| `duplicate_enum` error on manual add | That enum is already used by another motor | Each motor must have a unique two-character hex enum |
-| Timed calibration rejects "too short" | Submitted before motor reached endstop | Wait for the motor to stop completely before pressing Next |
+| Auto-pair times out | Motor not in pairing mode, out of range, or Pair not clicked in time | Put motor in pairing mode first, then click Pair in the dialog; move the stick closer if needed |
+| `invalid_enum_format` error on manual add | Transmit address is not exactly two hex characters | Use values like `10`, `11`, `1A` — no prefix, no spaces |
+| `duplicate_enum` error on manual add | That transmit address is already used by another motor | Each motor must have a unique two-character hex transmit address |
+| Timed calibration rejects "too short" | Submitted before motor reached endstop | Wait for the motor to stop completely before pressing Submit |
+| Timed calibration rejects "too long" | More than 120 seconds elapsed before pressing Submit | Ensure the motor reaches the endstop promptly; avoid leaving the dialog idle |
 | Position drifts over time | Calibration times no longer accurate | Recalibrate from the device page |
 
 For configuration details (serial port, baud rate, subentry data) see [docs/CONFIGURATION.md](CONFIGURATION.md).

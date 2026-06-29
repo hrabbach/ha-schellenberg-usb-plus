@@ -134,7 +134,7 @@ These values are fixed in the source and are not user-configurable:
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `BAUDRATE` | `112500` bps | Serial baud rate (set in `api.py`) |
+| Baud rate (hardcoded literal in `api.py`) | `112500` bps | Serial baud rate; not a named constant |
 | `VERIFY_TIMEOUT` | `5` seconds | Timeout waiting for stick version/mode response |
 | `PAIRING_TIMEOUT` | `120` seconds | Timeout waiting for a pairing RF response |
 | `PAIRING_DEVICE_ENUM_START` | `0x10` | First enumerator assigned during auto-pairing |
@@ -149,7 +149,7 @@ Source: `manifest.json`
 | Field | Value |
 |-------|-------|
 | Domain | `schellenberg_usb` |
-| Version | `1.0.0` |
+| Version | `1.1.0` |
 | Integration type | `hub` |
 | IoT class | `local_push` |
 | Requirement | `pyserial-asyncio-fast==0.16` |

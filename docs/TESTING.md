@@ -77,19 +77,23 @@ wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenber
 
 ## Test Organization
 
-All tests live in `tests/`. The suite has approximately 208 tests across these files:
+All tests live in `tests/`. The suite has approximately 262 tests across these files:
 
 | File | What it covers |
 |------|----------------|
 | `test_api.py` | `SchellenbergUsbApi` initialization, device registration, connect/disconnect |
 | `test_api_extended.py` | Edge cases for the API: retry logic, stick-busy handling, futures, error paths |
 | `test_api_messages.py` | Protocol message parsing — frame decoding, device ID extraction, status messages |
+| `test_api_reliability.py` | Safe future resolution, disconnect future drain, `_safe_resolve_future` helper, device enum slot allocation |
+| `test_api_robustness.py` | Bounded FIFO retry queue, frozen-stick heartbeat worker, exponential reconnect backoff |
 | `test_const.py` | Constants and type aliases exported from `const.py` |
+| `test_cover.py` | `SchellenbergCover` entity: open/close/set position, calibration, position tracking |
+| `test_cover_position.py` | `PositionTracker` pure-core math: opening/closing position calculation, clamping, divide-by-zero guard |
+| `test_config_flow.py` | Blind subentry manual-add flow, serial port validation, config entry creation |
 | `test_init.py` | `__init__.py` setup/teardown, subentry wiring, platform forwarding |
 | `test_init_extended.py` | Edge cases for integration lifecycle: reload, subentry changes, error handling |
-| `test_config_flow.py` | Blind subentry manual-add flow, serial port validation, config entry creation |
 | `test_options_flow.py` | Hub options flow (`ignore_unknown` toggle, serial port change) |
-| `test_cover.py` | `SchellenbergCover` entity: open/close/set position, calibration, position tracking |
+| `test_repairs.py` | Repairs platform: `async_create_fix_flow`, `UncalibratedMotorRepairFlow`, confirm form placeholders |
 | `test_sensor.py` | Sensor entities: stick connection status, firmware version, device mode |
 | `test_switch.py` | `SchellenbergLedSwitch` entity: on/off commands, state reporting |
 | `test_timed_calibration_flow.py` | Timed calibration flow: happy path, guard conditions (too short/too long) |
