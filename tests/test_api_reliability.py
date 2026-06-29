@@ -184,9 +184,7 @@ async def test_handle_message_after_drain_no_invalid_state_error(
     # Simulate a late RFTU frame arriving in the same tick — must not raise
     import unittest.mock as mock
 
-    with mock.patch(
-        "custom_components.schellenberg_usb.api.async_dispatcher_send"
-    ):
+    with mock.patch("custom_components.schellenberg_usb.api.async_dispatcher_send"):
         api._handle_message("RFTU_V20 F:20180510_DFBD B:1")
 
     # Future keeps its ConnectionError; no InvalidStateError was raised

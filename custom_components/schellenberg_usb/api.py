@@ -93,9 +93,7 @@ class SchellenbergUsbApi:
 
         # Retry queue for commands that failed with "stick busy"
         self._in_flight_command: str | None = None
-        self._retry_queue: asyncio.Queue[str] = asyncio.Queue(
-            maxsize=RETRY_QUEUE_CAP
-        )
+        self._retry_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=RETRY_QUEUE_CAP)
         self._retry_worker_task: asyncio.Task[None] | None = None
 
         # Heartbeat for frozen-stick detection
@@ -120,7 +118,7 @@ class SchellenbergUsbApi:
         Caller increments _reconnect_attempts; reset to 0 on successful connect.
         """
         raw = min(
-            RECONNECT_BACKOFF_BASE * (2 ** self._reconnect_attempts),
+            RECONNECT_BACKOFF_BASE * (2**self._reconnect_attempts),
             RECONNECT_BACKOFF_CAP,
         )
         jitter = random.uniform(0, raw / 2)
@@ -155,9 +153,7 @@ class SchellenbergUsbApi:
             return
         delay = self._compute_reconnect_delay()
         self._reconnect_attempts += 1
-        self._reconnect_handle = self.hass.loop.call_later(
-            delay, self._reconnect_fire
-        )
+        self._reconnect_handle = self.hass.loop.call_later(delay, self._reconnect_fire)
 
     async def connect(self) -> None:
         """Establish a connection to the serial port."""
@@ -225,7 +221,9 @@ class SchellenbergUsbApi:
 
             # Reset backoff on successful connect
             self._reconnect_attempts = 0
-            self._reconnect_handle = None  # clear any armed handle (belt-and-suspenders)
+            self._reconnect_handle = (
+                None  # clear any armed handle (belt-and-suspenders)
+            )
             self._last_traffic_time = self.hass.loop.time()
 
             # Start the retry worker and heartbeat tasks
@@ -432,9 +430,7 @@ class SchellenbergUsbApi:
             except (IndexError, ValueError) as err:
                 _LOGGER.debug("Failed to parse message %s: %s", message, err)
 
-    async def send_command(
-        self, command: str, *, track_traffic: bool = True
-    ) -> None:
+    async def send_command(self, command: str, *, track_traffic: bool = True) -> None:
         """Send a command to the USB stick."""
         if self._transport is None or self._transport.is_closing():
             _LOGGER.warning("Serial port not connected. Command dropped: %s", command)
@@ -477,9 +473,7 @@ class SchellenbergUsbApi:
                     continue
                 elapsed = self.hass.loop.time() - self._last_traffic_time
                 if elapsed < HEARTBEAT_TRAFFIC_WINDOW:
-                    _LOGGER.debug(
-                        "Heartbeat skip — traffic %.1fs ago", elapsed
-                    )
+                    _LOGGER.debug("Heartbeat skip — traffic %.1fs ago", elapsed)
                     miss_count = 0
                     continue
                 _LOGGER.debug("Heartbeat probe — sending CMD_VERIFY")

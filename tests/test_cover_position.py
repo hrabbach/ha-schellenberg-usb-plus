@@ -19,18 +19,12 @@ def test_position_tracker_opening_increases_position() -> None:
     # Back-date start_time by ~10 seconds so elapsed ≈ 10s
     start_time = time.monotonic() - 10.0
 
-    result = tracker.calculate(
-        start_pos, start_time, is_opening=True, is_closing=False
-    )
+    result = tracker.calculate(start_pos, start_time, is_opening=True, is_closing=False)
 
     assert result is not None, "Opening should return a position, not None"
-    assert result > start_pos, (
-        "Opening should increase position above start_pos"
-    )
+    assert result > start_pos, "Opening should increase position above start_pos"
     # 10s / 20s * 100 = 50%; allow ±10 for clock jitter
-    assert 40 <= result <= 60, (
-        f"Expected ~50%% for 10s/20s travel, got {result}"
-    )
+    assert 40 <= result <= 60, f"Expected ~50%% for 10s/20s travel, got {result}"
 
 
 # ---------------------------------------------------------------------------
@@ -44,17 +38,11 @@ def test_position_tracker_closing_decreases_position() -> None:
     start_pos = 100
     start_time = time.monotonic() - 10.0
 
-    result = tracker.calculate(
-        start_pos, start_time, is_opening=False, is_closing=True
-    )
+    result = tracker.calculate(start_pos, start_time, is_opening=False, is_closing=True)
 
     assert result is not None, "Closing should return a position, not None"
-    assert result < start_pos, (
-        "Closing should decrease position below start_pos"
-    )
-    assert 40 <= result <= 60, (
-        f"Expected ~50%% for 10s/20s travel, got {result}"
-    )
+    assert result < start_pos, "Closing should decrease position below start_pos"
+    assert 40 <= result <= 60, f"Expected ~50%% for 10s/20s travel, got {result}"
 
 
 # ---------------------------------------------------------------------------
@@ -67,9 +55,7 @@ def test_position_tracker_neither_flag_returns_none() -> None:
     tracker = PositionTracker(travel_time_open=20.0, travel_time_close=20.0)
     start_time = time.monotonic()
 
-    result = tracker.calculate(
-        50, start_time, is_opening=False, is_closing=False
-    )
+    result = tracker.calculate(50, start_time, is_opening=False, is_closing=False)
 
     assert result is None, (
         "Neither flag set must return None so entity position is unchanged; "
@@ -88,13 +74,10 @@ def test_position_tracker_zero_travel_time_returns_none() -> None:
     start_time = time.monotonic()
 
     # is_opening=True selects travel_time_open which is 0.0
-    result = tracker.calculate(
-        50, start_time, is_opening=True, is_closing=False
-    )
+    result = tracker.calculate(50, start_time, is_opening=True, is_closing=False)
 
     assert result is None, (
-        "Zero travel time must return None (divide-by-zero guard); "
-        f"got {result!r}"
+        f"Zero travel time must return None (divide-by-zero guard); got {result!r}"
     )
 
 
@@ -109,9 +92,7 @@ def test_position_tracker_clamps_result_at_100() -> None:
     # Back-date by 30s on a 10s travel → would be 300% without clamping
     start_time = time.monotonic() - 30.0
 
-    result = tracker.calculate(
-        0, start_time, is_opening=True, is_closing=False
-    )
+    result = tracker.calculate(0, start_time, is_opening=True, is_closing=False)
 
     assert result is not None
     assert result == 100, f"Expected clamped 100, got {result}"
@@ -122,9 +103,7 @@ def test_position_tracker_clamps_result_at_0() -> None:
     tracker = PositionTracker(travel_time_open=10.0, travel_time_close=10.0)
     start_time = time.monotonic() - 30.0
 
-    result = tracker.calculate(
-        100, start_time, is_opening=False, is_closing=True
-    )
+    result = tracker.calculate(100, start_time, is_opening=False, is_closing=True)
 
     assert result is not None
     assert result == 0, f"Expected clamped 0, got {result}"
@@ -141,30 +120,20 @@ def test_position_tracker_update_travel_times_changes_behavior() -> None:
     start_time = time.monotonic() - 10.0
 
     # With travel_time_open=20s and 10s elapsed → ~50%
-    result_before = tracker.calculate(
-        0, start_time, is_opening=True, is_closing=False
-    )
+    result_before = tracker.calculate(0, start_time, is_opening=True, is_closing=False)
     assert result_before is not None
-    assert 40 <= result_before <= 60, (
-        f"Pre-update expected ~50%%, got {result_before}"
-    )
+    assert 40 <= result_before <= 60, f"Pre-update expected ~50%%, got {result_before}"
 
     # Update to a much longer travel time
-    tracker.update_travel_times(
-        travel_time_open=100.0, travel_time_close=100.0
-    )
+    tracker.update_travel_times(travel_time_open=100.0, travel_time_close=100.0)
 
     # Refresh start_time to keep elapsed ≈ 10s relative to now
     start_time2 = time.monotonic() - 10.0
-    result_after = tracker.calculate(
-        0, start_time2, is_opening=True, is_closing=False
-    )
+    result_after = tracker.calculate(0, start_time2, is_opening=True, is_closing=False)
     assert result_after is not None
     # With travel_time_open=100s and 10s elapsed → ~10%
     assert result_after < result_before, (
         "Longer travel time should produce a smaller position delta; "
         f"before={result_before}, after={result_after}"
     )
-    assert result_after <= 20, (
-        f"Expected ≤20%% for 10s/100s travel, got {result_after}"
-    )
+    assert result_after <= 20, f"Expected ≤20%% for 10s/100s travel, got {result_after}"

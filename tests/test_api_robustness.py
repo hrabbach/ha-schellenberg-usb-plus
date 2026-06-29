@@ -94,10 +94,10 @@ async def test_queue_overflow_drops_newest_with_warning(
     # The overflow command is dropped; head of queue is still the first entry
     assert api._retry_queue.get_nowait() == "cmd_0"
     # A WARNING was emitted
-    assert any("drop" in record.message.lower() or "full" in record.message.lower()
-               for record in caplog.records), (
-        "Expected a WARNING about queue full / command drop"
-    )
+    assert any(
+        "drop" in record.message.lower() or "full" in record.message.lower()
+        for record in caplog.records
+    ), "Expected a WARNING about queue full / command drop"
 
 
 @pytest.mark.asyncio
@@ -120,9 +120,7 @@ async def test_retry_worker_resends_via_send_command(
 
     # transport.write must have been called with the re-sent command
     api._transport.write.assert_called()
-    written = b"".join(
-        call.args[0] for call in api._transport.write.call_args_list
-    )
+    written = b"".join(call.args[0] for call in api._transport.write.call_args_list)
     assert b"cmd_queued" in written
 
 
@@ -273,11 +271,11 @@ async def test_heartbeat_two_misses_mark_disconnected(
     never delays detection.
     """
     api = api_with_transport
-    api._last_traffic_time = hass.loop.time() - HEARTBEAT_TRAFFIC_WINDOW - 10  # clock-relative stale
+    api._last_traffic_time = (
+        hass.loop.time() - HEARTBEAT_TRAFFIC_WINDOW - 10
+    )  # clock-relative stale
 
-    with patch.object(
-        api, "verify_device", new=AsyncMock(return_value=False)
-    ):
+    with patch.object(api, "verify_device", new=AsyncMock(return_value=False)):
         with patch.object(api, "update_connection_status") as mock_disconnect:
             miss_count = 0
             for _ in range(HEARTBEAT_MISS_THRESHOLD):
@@ -302,22 +300,20 @@ async def test_heartbeat_single_miss_resets_on_success(
 ) -> None:
     """A miss followed by a successful probe resets miss_count to 0."""
     api = api_with_transport
-    api._last_traffic_time = hass.loop.time() - HEARTBEAT_TRAFFIC_WINDOW - 10  # clock-relative stale
+    api._last_traffic_time = (
+        hass.loop.time() - HEARTBEAT_TRAFFIC_WINDOW - 10
+    )  # clock-relative stale
 
     miss_count = 0
     with patch.object(api, "update_connection_status") as mock_disconnect:
         # First probe: miss
-        with patch.object(
-            api, "verify_device", new=AsyncMock(return_value=False)
-        ):
+        with patch.object(api, "verify_device", new=AsyncMock(return_value=False)):
             ok = await api.verify_device(heartbeat_probe=True)
             miss_count = 0 if ok else miss_count + 1
         assert miss_count == 1
 
         # Second probe: success → reset
-        with patch.object(
-            api, "verify_device", new=AsyncMock(return_value=True)
-        ):
+        with patch.object(api, "verify_device", new=AsyncMock(return_value=True)):
             ok = await api.verify_device(heartbeat_probe=True)
             if ok:
                 miss_count = 0
@@ -448,13 +444,16 @@ async def test_heartbeat_frozen_stick_schedules_reconnect(
     hass.loop.call_later = call_later_spy  # type: ignore[method-assign]
 
     try:
-        with patch(
-            "custom_components.schellenberg_usb.api.asyncio.sleep",
-            new=AsyncMock(return_value=None),
-        ), patch.object(
-            api,
-            "verify_device",
-            new=AsyncMock(return_value=False),
+        with (
+            patch(
+                "custom_components.schellenberg_usb.api.asyncio.sleep",
+                new=AsyncMock(return_value=None),
+            ),
+            patch.object(
+                api,
+                "verify_device",
+                new=AsyncMock(return_value=False),
+            ),
         ):
             # Drive the REAL _heartbeat_worker; it must return on its own once the
             # miss threshold is hit.  asyncio.wait_for guards against a regression
@@ -519,8 +518,9 @@ async def test_disconnect_cancels_pending_reconnect(
         await api.disconnect()
 
         # Assert 1: the pending TimerHandle was cancelled (CR-01 fix)
-        mock_handle.cancel.assert_called_once(), (
-            "disconnect() must cancel the pending reconnect TimerHandle (CR-01)"
+        (
+            mock_handle.cancel.assert_called_once(),
+            ("disconnect() must cancel the pending reconnect TimerHandle (CR-01)"),
         )
 
         # Assert 2: _closed is set (teardown latch)
@@ -534,8 +534,11 @@ async def test_disconnect_cancels_pending_reconnect(
             new=AsyncMock(),
         ) as mock_create:
             await api.connect()
-            mock_create.assert_not_called(), (
-                "connect() must be a no-op after disconnect() sets _closed=True (CR-01)"
+            (
+                mock_create.assert_not_called(),
+                (
+                    "connect() must be a no-op after disconnect() sets _closed=True (CR-01)"
+                ),
             )
     finally:
         hass.loop.call_later = real_call_later  # type: ignore[method-assign]
