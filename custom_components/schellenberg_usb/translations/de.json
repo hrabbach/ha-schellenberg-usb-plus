@@ -162,6 +162,22 @@
     }
   },
   "entity": {
+    "event": {
+      "remote_button": {
+        "name": "Fernbedienungstaste",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "up": "Auf",
+              "down": "Ab",
+              "stop": "Stopp",
+              "hold_up": "Auf halten",
+              "hold_down": "Ab halten"
+            }
+          }
+        }
+      }
+    },
     "sensor": {
       "connection_status": {
         "name": "Verbindungsstatus"
