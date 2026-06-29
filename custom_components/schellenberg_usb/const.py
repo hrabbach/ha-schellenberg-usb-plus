@@ -153,3 +153,15 @@ REMOTE_DEDUP_WINDOW = 1.0
 
 # seconds — learn-window default timeout (not UI-exposed)
 LEARN_REMOTE_TIMEOUT = 30.0
+
+# Remote button press → HA event type (Phase 13, D-01)
+# 01=up, 02=down, 00=stop, 41=hold_up, 42=hold_down
+# NOTE: the event entity does NOT fold 41/42 into up/down.
+# Contrast Phase 12 cover, which normalises them for position tracking.
+REMOTE_EVENT_MAP: dict[str, str] = {
+    CMD_UP: "up",  # "01"
+    CMD_DOWN: "down",  # "02"
+    CMD_STOP: "stop",  # "00"
+    CMD_MANUAL_UP: "hold_up",  # "41"
+    CMD_MANUAL_DOWN: "hold_down",  # "42"
+}
