@@ -1,7 +1,7 @@
 version: 2
 
 updates:
-  # ── Python dependencies (uv ecosystem) — grouped minor/patch ─────────────
+  # ── Python dependencies (uv ecosystem) — grouped minor/patch, PHACC isolated ─
   - package-ecosystem: "uv"
     directory: "/"
     schedule:
@@ -11,31 +11,21 @@ updates:
       - "dependencies"
     commit-message:
       prefix: "chore(deps)"
-    ignore:
-      - dependency-name: "pytest-homeassistant-custom-component"
     groups:
       python-minor-patch:
         patterns:
           - "*"
+        exclude-patterns:
+          - "pytest-homeassistant-custom-component"
         update-types:
           - "minor"
           - "patch"
+      ha-tracking:
+        # PHACC tracks HA releases — its own dedicated PR, kept out of the quiet group
+        patterns:
+          - "pytest-homeassistant-custom-component"
 
-  # ── PHACC — dedicated monthly PR (D-09, tracks HA releases) ──────────────
-  - package-ecosystem: "uv"
-    directory: "/"
-    schedule:
-      interval: "monthly"
-    open-pull-requests-limit: 1
-    labels:
-      - "dependencies"
-      - "ha-tracking"
-    commit-message:
-      prefix: "chore(deps)"
-    allow:
-      - dependency-name: "pytest-homeassistant-custom-component"
-
-  # ── GitHub Actions ────────────────────────────────────────────────────────
+  # ── GitHub Actions ──────────────────────────────────────────────────────────
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
