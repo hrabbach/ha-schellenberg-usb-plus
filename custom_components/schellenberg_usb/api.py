@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -386,6 +387,11 @@ class SchellenbergUsbApi:
                 device_id = message[4:10]
                 incrementor = message[10:14]
                 command = message[14:16]
+                # Capture frame-decode instant for the remote-event payload.
+                # Uses time.monotonic() so the timestamp shares the same epoch
+                # as PositionTracker.calculate, enabling accurate elapsed-time
+                # computation in the cover entity (Plan 02, D-06).
+                receive_timestamp = time.monotonic()
 
                 _LOGGER.debug(
                     "Parsed: enum=%s, id=%s, incr=%s, cmd=%s",
@@ -485,6 +491,7 @@ class SchellenbergUsbApi:
                         self.hass,
                         f"{SIGNAL_REMOTE_EVENT}_{motor_id}",
                         command,
+                        receive_timestamp,
                     )
                     return  # MANDATORY — does not reach final dispatch
 
