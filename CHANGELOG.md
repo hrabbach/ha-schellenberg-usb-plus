@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Home Assistant now shows a Repairs notification when a timed (non-bidirectional) motor is still using the default travel time, with a Fix button that guides you to calibrate it for accurate position tracking.
 - Device pairing now assigns the lowest free address slot and shows a clear "device limit reached" error when every slot is in use, so re-pairing can no longer silently overwrite an existing motor.
 - Automatic recovery from a frozen USB stick: a periodic heartbeat detects a stick that is still "connected" but has stopped responding and reconnects on its own, so motors keep working without restarting Home Assistant.
 
