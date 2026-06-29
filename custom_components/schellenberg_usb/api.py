@@ -122,6 +122,11 @@ class SchellenbergUsbApi:
         self._dedup_cache: dict[tuple[str, str], float] = {}
         # TimerHandles for dedup quiet-period resets (keyed by (device_id, incrementor))
         self._dedup_handles: dict[tuple[str, str], asyncio.TimerHandle] = {}
+        # Ref-count for multi-entity registration safety (Phase 13 D-04):
+        # both cover_entity (timed+bound) and event_entity call register_remote
+        # for the same (remote_id, motor_id) pair; unregister_remote only removes
+        # the mapping when the last holder unregisters.
+        self._remote_ref_counts: dict[str, int] = {}
 
     def _compute_reconnect_delay(self) -> float:
         """Return next reconnect delay: truncated exponential backoff, equal jitter.
@@ -815,7 +820,7 @@ class SchellenbergUsbApi:
     def register_remote(
         self, remote_id: str, motor_id: str, motor_enum: str
     ) -> None:
-        """Register a remote-to-motor binding.
+        """Register a remote-to-motor binding (ref-counted for multi-entity safety).
 
         Called from cover_entity.async_added_to_hass (Phase 12) when subentry
         carries CONF_REMOTE_ID. Adds the remote to _registered_devices so
@@ -844,19 +849,36 @@ class SchellenbergUsbApi:
             )
         self._registered_devices[remote_id] = motor_enum
         self._remote_to_motor[remote_id] = motor_id
+        self._remote_ref_counts[remote_id] = (
+            self._remote_ref_counts.get(remote_id, 0) + 1
+        )
         _LOGGER.debug(
-            "Registered remote %s → motor %s (enum=%s)",
-            remote_id, motor_id, motor_enum,
+            "Registered remote %s -> motor %s (enum=%s, ref=%d)",
+            remote_id,
+            motor_id,
+            motor_enum,
+            self._remote_ref_counts[remote_id],
         )
 
     def unregister_remote(self, remote_id: str) -> None:
-        """Remove a remote binding.
+        """Remove a remote binding (ref-counted; only removes when count reaches 0).
 
-        Called from cover_entity.async_will_remove_from_hass (Phase 12).
+        Called from cover_entity and event_entity async_on_remove (Phase 12/13).
+        Unregistering an unknown or zero-count remote_id is a safe no-op.
         """
+        count = self._remote_ref_counts.get(remote_id, 0)
+        if count > 1:
+            self._remote_ref_counts[remote_id] = count - 1
+            _LOGGER.debug(
+                "Unregistered remote %s (ref=%d, still active)",
+                remote_id,
+                count - 1,
+            )
+            return
         self._registered_devices.pop(remote_id, None)
         self._remote_to_motor.pop(remote_id, None)
-        _LOGGER.debug("Unregistered remote %s", remote_id)
+        self._remote_ref_counts.pop(remote_id, None)
+        _LOGGER.debug("Unregistered remote %s (fully removed)", remote_id)
 
     async def learn_remote_and_wait(
         self, timeout: float = LEARN_REMOTE_TIMEOUT
