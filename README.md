@@ -22,12 +22,12 @@ A Home Assistant custom integration that controls Schellenberg roller-shutter mo
 - Supports **timed (non-bidirectional) motors** that never confirm movement — position tracking is purely time-based using pre-measured travel times
 - **Time-based position tracking** — open/close times measured via a built-in calibration flow; drive-to-percentage works on any calibrated motor
 - **Auto-pairing** — put the stick into pairing mode from the HA UI; press the pairing button on the motor within 2 minutes
-- **Manual add** — add motors already paired by other remotes, or non-bidirectional motors, by entering their two-character hex enumerator slot
+- **Manual add** — add motors already paired by other remotes, or non-bidirectional motors, by entering a two-character hex enumerator: a user-chosen id that the stick uses to address that motor
 - **USB auto-discovery** — HA detects the stick on plug-in (USB VID `16C0` / PID `05E1`, manufacturer `van ooijen`) and pre-fills the serial port
 - **Stick status sensors** — connection status, firmware version, and operating mode
 - **LED switch** — toggle the USB stick LED on/off from HA
 - Local control only — no cloud dependency (`iot_class: local_push`)
-- Up to 240 device slots per stick (enumerators `0x10`–`0xFF`)
+- Up to 240 device slots per stick (enumerators `0x10`–`0xFF`; the integration allocates them automatically for auto-paired motors, starting at `0x10`)
 
 ---
 
@@ -99,7 +99,64 @@ Pairing is driven by the connected control device (remote or timer switch). Refe
 
 ### Non-bidirectional (timed) motors
 
-Motors in this category never send a pairing response. Use **Add manually** instead of **Pair automatically** and enter the motor's two-character hex enumerator slot directly.
+Motors in this category never send a pairing response — the in-app **Pair automatically** flow waits for the motor to transmit its device ID over RF, so a silent motor that was paired only to a physical remote will time out every time.
+
+To add a silent motor you first perform **wireless delegation pairing** outside the integration (teaching the motor to accept commands from the stick), then register it in HA via **Add manually**.
+
+#### What is the device enumerator?
+
+The two-character hex enumerator (e.g. `1A`) is a user-chosen id that the stick assigns to a motor at pairing time. It is the stick's address for that motor — not an address the motor already has. When you add a motor via **Pair automatically**, the integration allocates the lowest free enumerator starting at `10` automatically. When you add a motor via **Add manually** (after delegation pairing below), you pick a unique value yourself and enter that same value in the HA form.
+
+#### Wireless delegation pairing — worked example: Funk-Handsender 5 Kanal (Model 20016)
+
+This procedure teaches a motor that is already paired to a physical Schellenberg 5-channel remote to also accept commands from the USB stick. Perform these steps **before** adding the motor in Home Assistant, with HA (and the integration) either stopped or not yet owning the serial port — the raw commands below are sent directly to the port.
+
+**Prerequisites:** The HA host must have write access to the stick's serial device (e.g. `/dev/ttyACM0` or `/dev/ttyUSB0`). Identify the correct path with `ls /dev/tty*` after plugging in the stick.
+
+**Step 1 — Pick a unique enumerator.** Choose any two-character hex value in `02`–`FF` that is not already used by another motor in HA. Avoid `00` and `01`. Call it `XX` in the steps below (e.g. `1B`).
+
+**Step 2 — Put the motor into programming mode using the 20016 remote.**
+
+1. On the 20016 remote, select the channel that controls the target motor.
+2. Press the remote's **P-button** (programming button) — the remote LED blinks to confirm programming mode is active.
+3. Press **Stop** on the remote — the motor acknowledges with a brief jog or beep, indicating it is now in learn mode and ready to accept a new remote/stick ID.
+
+**Step 3 — Within ~10 seconds, send the two delegation frames from the HA host.**
+
+Replace `XX` with your chosen enumerator (e.g. `1B`) and `/dev/ttyACM0` with your actual port:
+
+```bash
+# Frame format: ss + {2-char enum} + 9 + {2-char command} + 0000
+# CMD_PAIR = 60  (teach the motor to respond to enumerator XX)
+echo 'ssXX9600000' > /dev/ttyACM0
+
+# CMD_ALLOW_PAIRING = 40  (instruct the motor to accept the new pairing)
+echo 'ssXX9400000' > /dev/ttyACM0
+```
+
+Concrete example for enumerator `1B`:
+
+```bash
+echo 'ss1B9600000' > /dev/ttyACM0
+echo 'ss1B9400000' > /dev/ttyACM0
+```
+
+> **Frame format reference (from `api.py`):** `ss{enum:2}{repeat:1}{cmd:2}{pad:4}` where repeat is always `9` and pad is always `0000`. Total: 11 characters. Example for enum `1B`: `ss` + `1B` + `9` + `60` + `0000` = `ss1B9600000`.
+
+**Step 4 — Confirm the motor learned the new id.** The motor acknowledges again (jog/beep). Exit programming mode on the 20016 remote by pressing the **P-button** again.
+
+**Step 5 — Test with drive commands.** Verify the motor responds to the stick before adding it in HA:
+
+```bash
+# CMD_UP = 01
+echo 'ssXX9010000' > /dev/ttyACM0
+# CMD_DOWN = 02
+echo 'ssXX9020000' > /dev/ttyACM0
+# CMD_STOP = 00
+echo 'ssXX9000000' > /dev/ttyACM0
+```
+
+**Step 6 — Add the motor in Home Assistant.** Go to **Settings → Devices & Services → Schellenberg USB → Add device → Add manually (already paired)**. Enter `XX` (the same hex value used above) as the device enumerator, select **timed (non-bidirectional)** motor type, and complete the form. The integration will now send all commands to that enumerator.
 
 ### General tips
 
