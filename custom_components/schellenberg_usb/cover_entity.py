@@ -327,6 +327,31 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
             )
         )
 
+        # REFACTOR-V2-08: flag uncalibrated timed motors in HA Repairs.
+        # Called without await — ir.async_create_issue is @callback (sync).
+        # Independence from connectivity is intentional (D-06): the issue
+        # reflects calibration state, not whether the stick is online.
+        if not self._is_bidirectional and not self._is_calibrated:
+            from homeassistant.helpers import (  # noqa: PLC0415
+                issue_registry as ir,
+            )
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                f"uncalibrated_motor_{self._device_id.upper()}",
+                is_fixable=True,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="uncalibrated_motor",
+                translation_placeholders={
+                    "device_name": self._attr_name or self._device_id
+                },
+                learn_more_url=(
+                    "https://github.com/hrabbach/ha-schellenberg-usb-plus"
+                    "/blob/main/README.md"
+                    "#timed-calibration-for-non-bidirectional-motors"
+                ),
+            )
+
     @callback
     def _handle_status_update(self) -> None:
         """Handle status update from API (connection state changed)."""
@@ -374,6 +399,15 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
         # Must run BEFORE async_write_ha_state() so the pushed state is correct.
         self._is_calibrated = True
 
+        # D-07: clear the Repairs issue — motor is now calibrated.
+        # async_delete_issue is @callback (same as async_create_issue).
+        from homeassistant.helpers import issue_registry as ir  # noqa: PLC0415
+        ir.async_delete_issue(
+            self.hass,
+            DOMAIN,
+            f"uncalibrated_motor_{self._device_id.upper()}",
+        )
+
         _LOGGER.info(
             "Device %s calibration updated: open_time=%.2fs, close_time=%.2fs."
             " Cover position set to %d%%",
@@ -389,6 +423,16 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
         """Clean up when entity is removed."""
         await super().async_will_remove_from_hass()
         self._stop_position_tracking()
+        # D-05: clear Repairs issue so no orphaned card survives subentry
+        # deletion. async_delete_issue is a no-op if the issue doesn't exist
+        # (A1 verified: "It is not an error to delete an issue that does not
+        # exist.") — safe for calibrated motors or bidirectional motors.
+        from homeassistant.helpers import issue_registry as ir  # noqa: PLC0415
+        ir.async_delete_issue(
+            self.hass,
+            DOMAIN,
+            f"uncalibrated_motor_{self._device_id.upper()}",
+        )
 
     @callback
     def _handle_event(self, event: str) -> None:

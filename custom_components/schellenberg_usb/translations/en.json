@@ -137,8 +137,7 @@
         "pairing_failed": "Pairing failed.",
         "device_not_found": "The selected device could not be found. Please try again.",
         "timed_cal_incomplete": "Calibration is incomplete — the open and close times were not both measured. Please start the calibration again.",
-        "reconfigure_successful": "Calibration completed successfully",
-        "timed_calibration_unavailable": "Calibration for timed motors is not yet available. It will be added in a future update."
+        "reconfigure_successful": "Calibration completed successfully"
       }
     }
   },
@@ -184,6 +183,19 @@
     "pair": {
       "name": "Pair device",
       "description": "Activate pairing mode on the Schellenberg USB stick to pair a new blind motor. After calling this service, press the pairing button on your blind motor within 10 seconds."
+    }
+  },
+  "issues": {
+    "uncalibrated_motor": {
+      "title": "{device_name} is using the default travel time",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Calibrate {device_name}",
+            "description": "**{device_name}** has not been timed-calibrated and uses a default travel time of 60 seconds — the position slider may be inaccurate.\n\nTo fix this, go to **Settings → Devices & Services → Schellenberg USB**, select the device, click **Configure**, and follow the timed calibration steps."
+          }
+        }
+      }
     }
   }
 }

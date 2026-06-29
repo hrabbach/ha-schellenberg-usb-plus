@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from types import MappingProxyType
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.components.cover import ATTR_POSITION
@@ -1706,6 +1706,159 @@ async def test_timed_restart_no_prior_state_uses_initial_position(
 
     assert cover._attr_current_cover_position == 70
 
+
+# ---------------------------------------------------------------------------
+# REFACTOR-V2-08: Repairs issue lifecycle (SC#1 / SC#2 / D-05 / D-06 / D-07)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_repair_issue_raised_for_uncalibrated_timed_motor(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """SC#1 / D-06: uncalibrated timed motor raises one Repairs issue in
+    async_added_to_hass, keyed on the uppercased device_id."""
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="AABBCC",
+        device_enum="10",
+        device_name="Test Blind",
+        device_data={CONF_BIDIRECTIONAL: False},  # no CONF_OPEN_TIME/CONF_CLOSE_TIME
+        config_entry_id="entry_id",
+    )
+    cover.hass = hass
+    with patch(
+        "homeassistant.helpers.issue_registry.async_create_issue"
+    ) as mock_create:
+        with patch.object(cover, "async_get_last_state", return_value=None):
+            with patch(
+                "custom_components.schellenberg_usb.cover.async_dispatcher_connect"
+            ):
+                with patch.object(cover, "async_write_ha_state"):
+                    await cover.async_added_to_hass()
+        mock_create.assert_called_once_with(
+            hass,
+            DOMAIN,
+            "uncalibrated_motor_AABBCC",
+            is_fixable=True,
+            severity=ANY,
+            translation_key="uncalibrated_motor",
+            translation_placeholders={"device_name": "Test Blind"},
+            learn_more_url=ANY,
+        )
+
+
+@pytest.mark.asyncio
+async def test_repair_issue_not_raised_for_calibrated_motor(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """SC#1: a motor with real CONF_OPEN_TIME/CONF_CLOSE_TIME raises no issue."""
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="AABBCC",
+        device_enum="10",
+        device_name="Test Blind",
+        device_data={
+            CONF_BIDIRECTIONAL: False,
+            CONF_OPEN_TIME: 25.0,
+            CONF_CLOSE_TIME: 23.0,
+        },
+        config_entry_id="entry_id",
+    )
+    cover.hass = hass
+    with patch(
+        "homeassistant.helpers.issue_registry.async_create_issue"
+    ) as mock_create:
+        with patch.object(cover, "async_get_last_state", return_value=None):
+            with patch(
+                "custom_components.schellenberg_usb.cover.async_dispatcher_connect"
+            ):
+                with patch.object(cover, "async_write_ha_state"):
+                    await cover.async_added_to_hass()
+        mock_create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_repair_issue_not_raised_for_bidirectional_motor(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """SC#1: a bidirectional motor raises no Repairs issue."""
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="AABBCC",
+        device_enum="10",
+        device_name="Test Blind",
+        device_data={CONF_BIDIRECTIONAL: True},
+        config_entry_id="entry_id",
+    )
+    cover.hass = hass
+    with patch(
+        "homeassistant.helpers.issue_registry.async_create_issue"
+    ) as mock_create:
+        with patch.object(cover, "async_get_last_state", return_value=None):
+            with patch(
+                "custom_components.schellenberg_usb.cover.async_dispatcher_connect"
+            ):
+                with patch.object(cover, "async_write_ha_state"):
+                    await cover.async_added_to_hass()
+        mock_create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_repair_issue_cleared_on_calibration_completed(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """SC#2 / D-07: _handle_calibration_completed calls async_delete_issue once
+    with the matching uppercased issue_id."""
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="AABBCC",
+        device_enum="10",
+        device_name="Test Blind",
+        device_data={CONF_BIDIRECTIONAL: False},
+    )
+    cover.hass = hass
+    with patch(
+        "homeassistant.helpers.issue_registry.async_delete_issue"
+    ) as mock_delete:
+        with patch.object(cover, "async_write_ha_state"):
+            cover._handle_calibration_completed("AABBCC", 20.0, 18.0, 100)
+        mock_delete.assert_called_once_with(
+            hass,
+            DOMAIN,
+            "uncalibrated_motor_AABBCC",
+        )
+
+
+@pytest.mark.asyncio
+async def test_repair_issue_cleared_on_entity_removal(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """D-05 / D-07: async_will_remove_from_hass calls async_delete_issue once
+    with the matching uppercased issue_id, clearing any orphaned Repairs card."""
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="AABBCC",
+        device_enum="10",
+        device_name="Test Blind",
+        device_data={CONF_BIDIRECTIONAL: False},
+    )
+    cover.hass = hass
+    with patch(
+        "homeassistant.helpers.issue_registry.async_delete_issue"
+    ) as mock_delete:
+        with patch.object(cover, "_stop_position_tracking"):
+            await cover.async_will_remove_from_hass()
+        mock_delete.assert_called_once_with(
+            hass,
+            DOMAIN,
+            "uncalibrated_motor_AABBCC",
+        )
 
 @pytest.mark.asyncio
 async def test_timed_restart_no_prior_no_initial_defaults_to_100(

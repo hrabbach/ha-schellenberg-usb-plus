@@ -184,5 +184,18 @@
       "name": "Emparejar dispositivo",
       "description": "Active el modo de emparejamiento en la memoria USB Schellenberg para emparejar un nuevo motor de persiana. Después de llamar a este servicio, presione el botón de emparejamiento en su motor de persiana en los próximos 10 segundos."
     }
+  },
+  "issues": {
+    "uncalibrated_motor": {
+      "title": "{device_name} está usando el tiempo de desplazamiento predeterminado",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Calibrar {device_name}",
+            "description": "**{device_name}** no ha sido calibrado y usa un tiempo de desplazamiento predeterminado de 60 segundos — el control deslizante de posición puede ser impreciso.\n\nPara calibrar, ve a **Configuración → Dispositivos y Servicios → Schellenberg USB**, selecciona el dispositivo, haz clic en **Configurar** y sigue los pasos de calibración."
+          }
+        }
+      }
+    }
   }
 }
