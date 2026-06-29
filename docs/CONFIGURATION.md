@@ -47,13 +47,13 @@ Each paired blind motor is a **subentry** under the hub. Subentries are added vi
 | Method | Description |
 |--------|-------------|
 | **Pair automatically** | Put the stick into pairing mode and wait for a motor to respond over RF. The motor's device ID and enumerator are captured automatically. |
-| **Add manually** | Specify a hex device enumerator directly (for motors already paired by other remotes that will never send a pairing event). |
+| **Add manually** | Specify a user-chosen hex device enumerator (a 2-char id the stick uses to address this motor) for motors that were delegation-paired outside the integration or whose device ID is already known. |
 
 ### Manual-Add Fields
 
 | Field | Key | Type | Required | Default | Description |
 |-------|-----|------|----------|---------|-------------|
-| Device enumerator | `device_enum` | 2-char hex string | Yes | — | Hex enumerator assigned to this motor (e.g. `10`, `11`). Must be unique across all blind subentries. Range: `00`–`FF`. Stored as uppercase. |
+| Device enumerator | `device_enum` | 2-char hex string | Yes | — | A user-chosen 2-char hex id (e.g. `10`, `1B`) that the stick uses to address this motor. Assigned at pairing time — not an address the motor inherently has. For delegation-paired motors, use the same value sent in the delegation frames. Recommended range: `02`–`FF`; avoid `00` and `01` for manually delegation-paired motors. Must be unique across all blind subentries. Stored as uppercase. |
 | Bidirectional | `bidirectional` | boolean | Yes | `true` | `true` = motor reports movement events back (event-based position tracking). `false` = timed/non-bidirectional motor (position computed from calibration times only). |
 | Friendly name | `device_name` | string | No | `Blind {device_enum}` | Display name shown in HA. Falls back to `Blind {enum}` if left blank. |
 

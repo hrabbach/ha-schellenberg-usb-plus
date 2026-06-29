@@ -61,10 +61,15 @@ Use this when the motor has never been paired to the USB stick and is within rad
 
 ### Option B — Manual add (motor is already paired to the stick)
 
-Use this when the motor was paired by hand before you installed this integration, or when the motor never sends events back (non-bidirectional / timed motors).
+Use this when the motor was paired to the USB stick by hand before you installed this integration, or when the motor never sends events back (non-bidirectional / timed motors).
+
+> **Motors already paired only to a physical remote (not to the stick):** The in-app **Pair automatically** flow waits for the motor to transmit its device ID over RF. A silent, non-bidirectional motor that was only ever paired to a physical remote will never do this and will always time out. You need to perform the **wireless delegation pairing** procedure first — see [README — Device Pairing Instructions](../README.md#device-pairing-instructions) for the step-by-step walkthrough — then return here and enter the chosen enumerator via **Add manually**.
 
 1. Choose **Add manually (already paired)**.
-2. Enter the motor's two-character hexadecimal transmit address (enum slot, e.g. `10`, `11`, `1A`). This identifies the slot the motor occupies in the stick's pairing table; check your stick's pairing log or use `10` for the first motor, `11` for the second, and so on. The value is case-insensitive and must be exactly two hex characters.
+2. Enter the **device enumerator** — a user-chosen two-character hex id (e.g. `10`, `11`, `1A`) that the stick uses to address this motor. This is not an address the motor already has; it is assigned when the motor is paired to the stick:
+   - If you auto-paired this motor earlier using **Pair automatically**, the integration allocated it automatically (starting at `10` for the first motor). Check the HA device entry or the integration logs for the value it assigned.
+   - If you are completing a delegation pairing (see above), use the same hex value you sent in the delegation frames — that is the value to enter here.
+   - The value is case-insensitive and must be exactly two hex characters.
 3. Choose the motor type:
    - **Bidirectional motor** (toggle on, default) — motor sends movement events back to the stick (most ROLLODRIVE PREMIUM motors). Leave this toggled on.
    - **Bidirectional motor** (toggle off) — motor never confirms movement; drive-to-position relies on button-press timing (timed motor).
@@ -131,8 +136,8 @@ If travel times change (motor replaced, mechanical adjustment, etc.), open the m
 | Integration not found after install | HA not restarted, or browser cache | Restart HA; clear browser cache |
 | "Cannot connect" on serial port | Wrong path or permission denied | Verify the path with `ls /dev/tty*`; add the HA user to the `dialout` group |
 | Auto-pair times out | Motor not in pairing mode, out of range, or Pair not clicked in time | Put motor in pairing mode first, then click Pair in the dialog; move the stick closer if needed |
-| `invalid_enum_format` error on manual add | Transmit address is not exactly two hex characters | Use values like `10`, `11`, `1A` — no prefix, no spaces |
-| `duplicate_enum` error on manual add | That transmit address is already used by another motor | Each motor must have a unique two-character hex transmit address |
+| `invalid_enum_format` error on manual add | Enumerator is not exactly two hex characters | Use values like `10`, `11`, `1A` — no prefix, no spaces |
+| `duplicate_enum` error on manual add | That enumerator is already used by another motor | Each motor must have a unique two-character hex enumerator |
 | Timed calibration rejects "too short" | Submitted before motor reached endstop | Wait for the motor to stop completely before pressing Submit |
 | Timed calibration rejects "too long" | More than 120 seconds elapsed before pressing Submit | Ensure the motor reaches the endstop promptly; avoid leaving the dialog idle |
 | Position drifts over time | Calibration times no longer accurate | Recalibrate from the device page |
