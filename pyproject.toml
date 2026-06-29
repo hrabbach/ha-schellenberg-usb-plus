@@ -14,10 +14,10 @@ dev = [
 ]
 
 test = [
-    "croniter~=6.0.0",
+    "croniter~=6.2.2",
     "watchdog~=6.0.0",
     "mock-open~=1.4.0",
-    "polyfactory~=3.1.0",
+    "polyfactory~=3.3.0",
     "PyYAML~=6.0.2",
     # Need specific versions
     "pytest-homeassistant-custom-component==0.13.299",
@@ -31,7 +31,7 @@ test = [
 lint = [
     "codespell~=2.4.1",
     "mypy~=1.18.2",
-    "ruff~=0.14.1",
+    "ruff~=0.15.20",
     "types-PyYAML~=6.0.12.20250915",
 ]
 
