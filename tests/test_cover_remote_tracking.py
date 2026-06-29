@@ -16,6 +16,8 @@ from custom_components.schellenberg_usb.const import (
     CMD_STOP,
     CMD_UP,
     CONF_BIDIRECTIONAL,
+    CONF_CLOSE_TIME,
+    CONF_OPEN_TIME,
     CONF_REMOTE_ID,
     SIGNAL_REMOTE_EVENT,
 )
@@ -453,3 +455,199 @@ async def test_register_remote_idempotent_on_readd(hass: HomeAssistant) -> None:
     assert len([k for k in api._remote_to_motor if k == "REM001"]) == 1
     # Must map to the correct motor (dict[str, str]: remote_id -> motor_id)
     assert api._remote_to_motor["REM001"] == "MOT001"
+
+
+# ---------------------------------------------------------------------------
+# IN-04 Gap: Position outcome from back-dated remote move (RMT-04 end-to-end)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_remote_open_position_ramps_from_backdated_start(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """Remote UP-press back-dates _move_start_time; position loop ramps toward 100 (IN-04/RMT-04).
+
+    This test exercises the REAL _async_position_update_loop (not patched)
+    from a back-dated start time to assert the numeric position actually
+    advances toward the endstop, not just that flags are set (which the
+    unit tests already verify). Uses a short travel time so the move
+    completes within test asyncio time.
+    """
+    import asyncio
+    import time as _time
+
+    # Short travel time (0.4s) so a 0.2s back-date → 50% progress quickly
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="MOT001",
+        device_enum="10",
+        device_name="Test Blind",
+        device_data={
+            CONF_BIDIRECTIONAL: False,
+            CONF_REMOTE_ID: "REM001",
+            CONF_OPEN_TIME: 0.4,
+            CONF_CLOSE_TIME: 0.4,
+        },
+    )
+    cover.hass = hass
+    cover._attr_current_cover_position = 0
+
+    # Suppress async_write_ha_state for the WHOLE test (instance-level) so a
+    # stray late tick from the background loop is harmless even after the test
+    # body exits — the manually-constructed entity has no entity_id and a real
+    # write would raise NoEntitySpecifiedError at teardown.
+    cover.async_write_ha_state = MagicMock()  # type: ignore[method-assign]
+
+    # Back-date the receive_timestamp by ~0.2s so the loop starts with
+    # 0.2s elapsed on a 0.4s travel → position should be ~50% on first tick
+    receive_ts = _time.monotonic() - 0.2
+
+    # Call _handle_remote_event with CMD_UP (not patched) so the real
+    # _start_position_tracking fires and creates the real position loop
+    cover._handle_remote_event(CMD_UP, receive_ts)
+
+    # At this point _attr_is_opening is True and the loop task is queued
+    assert cover._attr_is_opening is True
+
+    # Let the event loop run the position-update loop a couple iterations
+    # (0.2s sleep per tick + computation, so 0.5s wall time is safe)
+    await asyncio.sleep(0.5)
+
+    # Position must have advanced from 0 due to the back-dated start.
+    # With ~0.2s back-date + 0.5s elapsed ≈ 0.7s total on a 0.4s travel,
+    # position should have ramped well past 50% and self-capped at 100 OR
+    # be in the 80-100 range if the loop is still running
+    assert cover._attr_current_cover_position is not None, (
+        "Position should be calculated after remote move"
+    )
+    assert cover._attr_current_cover_position > 0, (
+        f"Position must advance from start (0), got {cover._attr_current_cover_position}"
+    )
+    # With 0.7s total elapsed on 0.4s travel, position should be ~175%
+    # clamped to 100
+    assert cover._attr_current_cover_position >= 80, (
+        f"Back-dated 0.2s + 0.5s elapsed on 0.4s travel should be ~100%, got {cover._attr_current_cover_position}%"
+    )
+
+    # Stop the background loop so no task leaks past the test (teardown safety).
+    cover._stop_position_tracking()
+
+
+@pytest.mark.asyncio
+async def test_remote_close_position_ramps_from_backdated_start(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """Remote DOWN-press back-dates _move_start_time; position loop ramps toward 0 (IN-04/RMT-04).
+
+    Mirrors the OPEN test but for the CLOSE direction, starting from 100
+    and ramping down toward 0.
+    """
+    import asyncio
+    import time as _time
+
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="MOT002",
+        device_enum="11",
+        device_name="Test Blind 2",
+        device_data={
+            CONF_BIDIRECTIONAL: False,
+            CONF_REMOTE_ID: "REM002",
+            CONF_OPEN_TIME: 0.4,
+            CONF_CLOSE_TIME: 0.4,
+        },
+    )
+    cover.hass = hass
+    cover._attr_current_cover_position = 100
+
+    # Suppress async_write_ha_state for the WHOLE test (instance-level) so a
+    # stray late tick from the background loop is harmless even after the test
+    # body exits — the manually-constructed entity has no entity_id and a real
+    # write would raise NoEntitySpecifiedError at teardown.
+    cover.async_write_ha_state = MagicMock()  # type: ignore[method-assign]
+
+    receive_ts = _time.monotonic() - 0.2
+
+    cover._handle_remote_event(CMD_DOWN, receive_ts)
+
+    assert cover._attr_is_closing is True
+
+    await asyncio.sleep(0.5)
+
+    assert cover._attr_current_cover_position is not None
+    assert cover._attr_current_cover_position < 100, (
+        f"Position must decrease from start (100), got {cover._attr_current_cover_position}"
+    )
+    assert cover._attr_current_cover_position <= 20, (
+        f"Back-dated 0.2s + 0.5s elapsed on 0.4s travel should be ~0%, got {cover._attr_current_cover_position}%"
+    )
+
+    # Stop the background loop so no task leaks past the test (teardown safety).
+    cover._stop_position_tracking()
+
+
+@pytest.mark.asyncio
+async def test_remote_stop_latches_calculated_position(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """Remote STOP mid-travel latches the calculated position, not a snap (IN-04/RMT-05).
+
+    Start a back-dated remote open at 0%, let it ramp to ~50%, then
+    send a STOP. The position should latch at the calculated value
+    (not snapped to a target), and the move flags should clear.
+    """
+    import asyncio
+    import time as _time
+
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="MOT003",
+        device_enum="12",
+        device_name="Test Blind 3",
+        device_data={
+            CONF_BIDIRECTIONAL: False,
+            CONF_REMOTE_ID: "REM003",
+            CONF_OPEN_TIME: 1.0,  # 1.0s travel
+            CONF_CLOSE_TIME: 1.0,
+        },
+    )
+    cover.hass = hass
+    cover._attr_current_cover_position = 0
+
+    # Back-date by ~0.5s on a 1.0s travel → ~50% when STOP arrives
+    receive_ts = _time.monotonic() - 0.5
+
+    with patch.object(cover, "async_write_ha_state"):
+        cover._handle_remote_event(CMD_UP, receive_ts)
+
+    assert cover._attr_is_opening is True
+    initial_pos = cover._attr_current_cover_position
+
+    # Let the loop advance position a bit (0.15s is one tick + margin)
+    await asyncio.sleep(0.15)
+    pos_before_stop = cover._attr_current_cover_position
+
+    # Now send STOP
+    with patch.object(cover, "async_write_ha_state"):
+        cover._handle_remote_event(CMD_STOP, _time.monotonic())
+
+    # Flags must clear
+    assert cover._attr_is_opening is False
+    assert cover._attr_is_closing is False
+
+    # Position must be latched at the calculated value (not snapped to 0/100)
+    pos_after_stop = cover._attr_current_cover_position
+    assert pos_after_stop is not None
+    # Position should have been latched, not changed by the STOP itself
+    # (the loop already calculated it before STOP was received)
+    assert pos_after_stop > initial_pos, (
+        f"Position should have advanced before STOP; before_stop={pos_before_stop}, after_stop={pos_after_stop}"
+    )
+    # Must NOT snap to an endstop (no target was set, so no snap should occur)
+    assert pos_after_stop not in (0, 100), (
+        f"STOP-latched position should not snap to endstop, got {pos_after_stop}"
+    )
