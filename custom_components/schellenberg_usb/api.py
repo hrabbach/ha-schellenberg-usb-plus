@@ -805,6 +805,17 @@ class SchellenbergUsbApi:
         discriminator between remote and motor frames; do NOT rely on
         _registered_devices to tell them apart.
         """
+        # Observability only (WR-03): warn when an existing remote→motor
+        # binding is overwritten with a DIFFERENT motor, so a misconfig
+        # (re-bind, or a double async_added_to_hass) leaves a log trail.
+        # This does NOT reject or alter the binding — binding policy is
+        # deliberately deferred to Phase 15 (D-07).
+        existing = self._remote_to_motor.get(remote_id)
+        if existing is not None and existing != motor_id:
+            _LOGGER.warning(
+                "Remote %s re-bound from motor %s to %s",
+                remote_id, existing, motor_id,
+            )
         self._registered_devices[remote_id] = motor_enum
         self._remote_to_motor[remote_id] = motor_id
         _LOGGER.debug(
