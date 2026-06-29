@@ -393,6 +393,12 @@ class SchellenbergUsbApi:
                 )
 
                 # [GATE 1] — pairing-future: unchanged from existing code
+                # Gate 1 intentionally PRECEDES Gate 2 (dedup): the pairing
+                # path captures a new device ID on the first frame and is
+                # therefore NOT dedup-suppressed. This ordering is by design
+                # (HA opens one pairing window at a time and the user is
+                # deliberately pairing) and is not "corrected" later — do not
+                # move dedup ahead of it (WR-04).
                 if self._pairing_future and not self._pairing_future.done():
                     if device_id not in self._registered_devices:
                         _LOGGER.info(
@@ -426,6 +432,13 @@ class SchellenbergUsbApi:
                     dedup_key = (device_id, incrementor)
                     now = self.hass.loop.time()
                     cached_time = self._dedup_cache.get(dedup_key)
+                    # The dedup window is intentionally anchored to the FIRST
+                    # frame of a burst (NOT a sliding window): a suppressed
+                    # repeat does NOT refresh the timestamp or reschedule the
+                    # reset timer below. A same-incrementor repeat that arrives
+                    # after REMOTE_DEDUP_WINDOW is treated as a NEW press by
+                    # design (covers a normal ~0.5s 9-frame burst). Do not
+                    # convert this to a sliding window (WR-02).
                     if (
                         cached_time is not None
                         and (now - cached_time) < REMOTE_DEDUP_WINDOW
