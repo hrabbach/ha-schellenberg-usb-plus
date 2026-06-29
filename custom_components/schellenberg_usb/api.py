@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -386,6 +387,11 @@ class SchellenbergUsbApi:
                 device_id = message[4:10]
                 incrementor = message[10:14]
                 command = message[14:16]
+                # Capture frame-decode instant for the remote-event payload.
+                # Uses time.monotonic() so the timestamp shares the same epoch
+                # as PositionTracker.calculate, enabling accurate elapsed-time
+                # computation in the cover entity (Plan 02, D-06).
+                receive_timestamp = time.monotonic()
 
                 _LOGGER.debug(
                     "Parsed: enum=%s, id=%s, incr=%s, cmd=%s",
@@ -428,7 +434,13 @@ class SchellenbergUsbApi:
                 # Scoped to remote/learning frames only (review finding #1):
                 # a registered MOTOR frame skips this gate entirely and is
                 # never suppressed, even if it reuses an incrementor.
-                if is_remote or is_learning:
+                # WR-12-02: STOP frames also bypass dedup. STOP is idempotent
+                # and rare; suppressing a duplicate STOP is harmless, but
+                # suppressing a real STOP that shares an incrementor with a
+                # preceding UP/DOWN burst (same press window) would leave HA
+                # tracking toward an endstop while the shutter has stopped — a
+                # user-visible position divergence. Never gate STOP on dedup.
+                if (is_remote or is_learning) and command != CMD_STOP:
                     dedup_key = (device_id, incrementor)
                     now = self.hass.loop.time()
                     cached_time = self._dedup_cache.get(dedup_key)
@@ -485,6 +497,7 @@ class SchellenbergUsbApi:
                         self.hass,
                         f"{SIGNAL_REMOTE_EVENT}_{motor_id}",
                         command,
+                        receive_timestamp,
                     )
                     return  # MANDATORY — does not reach final dispatch
 

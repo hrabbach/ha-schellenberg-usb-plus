@@ -103,6 +103,10 @@ Motors in this category never send a pairing response — the in-app **Pair auto
 
 To add a silent motor you first perform **wireless delegation pairing** outside the integration (teaching the motor to accept commands from the stick), then register it in HA via **Add manually**.
 
+#### Remote-driven position tracking (best-effort)
+
+When a timed motor has a bound physical remote registered in Home Assistant, the integration tracks position updates triggered by that remote. Because timed motors give no movement confirmation, this tracking is time-based and approximate — the position shown in HA reflects elapsed time since the button press, not a confirmed motor state. The position self-corrects the next time you open or close the motor through Home Assistant directly. If a remote press is missed (e.g. out of radio range), the position in HA will not update for that press.
+
 #### What is the device enumerator?
 
 The two-character hex enumerator (e.g. `1A`) is a user-chosen id that the stick assigns to a motor at pairing time. It is the stick's address for that motor — not an address the motor already has. When you add a motor via **Pair automatically**, the integration allocates the lowest free enumerator starting at `10` automatically. When you add a motor via **Add manually** (after delegation pairing below), you pick a unique value yourself and enter that same value in the HA form.
