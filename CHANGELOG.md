@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - After the USB stick is unplugged or the serial port disappears, reconnection now backs off gradually (about 5 seconds up to 5 minutes) instead of retrying every 5 seconds, sharply reducing log noise.
+- Internal: the cover platform was reorganized from a single large `cover.py` into focused modules (`cover_entity.py`, `cover_position.py`, `cover_calibration.py`), with `cover.py` kept as a thin compatibility shim. No change to behavior, entity IDs, or stored calibration data.
 
 ### Fixed
 

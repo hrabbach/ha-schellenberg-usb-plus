@@ -2116,3 +2116,49 @@ async def test_timed_calibration_survives_reconfigure_reload(
     assert rebuilt_cover._is_calibrated is True, (
         "Rebuilt cover must remain calibrated after the reconfigure reload."
     )
+
+
+# ---------------------------------------------------------------------------
+# GAP 2 — Neither-flag idle regression (review finding #1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cover_update_position_neither_flag_leaves_position_unchanged(
+    hass: HomeAssistant,
+    mock_api: SchellenbergUsbApi,
+) -> None:
+    """Neither-flag idle: _update_position() must NOT alter position.
+
+    Regression guard for review finding #1: if the delegation to
+    PositionTracker regressed to passing a single flag (e.g. only
+    is_opening), the tracker could branch on is_closing=False and
+    return a value that incorrectly changes the stored position. With
+    both flags False the tracker must return None so the entity skips
+    the assignment.
+    """
+    import time
+
+    cover = SchellenbergCover(
+        api=mock_api,
+        device_id="ABC123",
+        device_enum="01",
+        device_name="Test Cover",
+        device_data={CONF_OPEN_TIME: 20.0, CONF_CLOSE_TIME: 20.0},
+    )
+    cover.hass = hass
+    expected_position = 37
+    cover._attr_current_cover_position = expected_position
+    cover._move_start_position = expected_position
+    # Back-date start so elapsed time would produce a non-zero delta
+    # if a direction flag were incorrectly truthy.
+    cover._move_start_time = time.monotonic() - 5.0
+    cover._attr_is_opening = False
+    cover._attr_is_closing = False
+
+    cover._update_position()
+
+    assert cover._attr_current_cover_position == expected_position, (
+        "Position must be unchanged when neither is_opening nor "
+        f"is_closing is True; got {cover._attr_current_cover_position!r}"
+    )

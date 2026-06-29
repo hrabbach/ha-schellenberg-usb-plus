@@ -114,6 +114,15 @@ CONF_DEVICE_ID = "device_id"  # Device ID for calibration
 CAL_MAX_TRAVEL_TIME = 120  # seconds — reject "walked away" runs (D-08)
 CAL_MIN_TRAVEL_TIME = 2  # seconds — reject double-press/misfire (D-09)
 
+# Calibration storage contract (cover platform) — Phase 9: moved from
+# cover.py. These are the persisted-format contract; values must never
+# change (a different key/version loses or migrates stored data).
+_CAL_STORE_VERSION = 1
+_CAL_STORE_KEY = f"{DOMAIN}_calibration"
+_HASS_DATA_KEY = f"{DOMAIN}_cal_persistence"
+_DATA_STORE = "store"
+_DATA_CACHE = "cache"
+
 # Manual-add device mode flag (stored in subentry.data)
 CONF_BIDIRECTIONAL = "bidirectional"  # bool; False = timed/non-bidirectional
 CONF_INITIAL_POSITION = "initial_position"  # int 0-100; timed motors only
