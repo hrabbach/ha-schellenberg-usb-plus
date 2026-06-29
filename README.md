@@ -107,7 +107,7 @@ To add a silent motor you first perform **wireless delegation pairing** outside 
 
 The two-character hex enumerator (e.g. `1A`) is a user-chosen id that the stick assigns to a motor at pairing time. It is the stick's address for that motor — not an address the motor already has. When you add a motor via **Pair automatically**, the integration allocates the lowest free enumerator starting at `10` automatically. When you add a motor via **Add manually** (after delegation pairing below), you pick a unique value yourself and enter that same value in the HA form.
 
-#### Wireless delegation pairing — worked example: Funk-Handsender 5 Kanal (Model 20016)
+#### Wireless delegation pairing using a 5-channel remote (Funk-Handsender 5 Kanal, Model 20016)
 
 This procedure teaches a motor that is already paired to a physical Schellenberg 5-channel remote to also accept commands from the USB stick. Perform these steps **before** adding the motor in Home Assistant, with HA (and the integration) either stopped or not yet owning the serial port — the raw commands below are sent directly to the port.
 
