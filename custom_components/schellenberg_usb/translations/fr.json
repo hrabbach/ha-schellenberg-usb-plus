@@ -184,5 +184,18 @@
       "name": "Appairer l'appareil",
       "description": "Activez le mode d'appairage sur la clé USB Schellenberg pour appairer un nouveau moteur de volet. Après avoir appelé ce service, appuyez sur le bouton d'appairage de votre moteur de volet dans les 10 secondes."
     }
+  },
+  "issues": {
+    "uncalibrated_motor": {
+      "title": "{device_name} utilise le temps de déplacement par défaut",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Calibrer {device_name}",
+            "description": "**{device_name}** n'a pas été calibré et utilise un temps de déplacement par défaut de 60 secondes — le curseur de position peut être imprécis.\n\nPour calibrer, allez dans **Paramètres → Appareils et Services → Schellenberg USB**, sélectionnez l'appareil, cliquez sur **Configurer** et suivez les étapes de calibration."
+          }
+        }
+      }
+    }
   }
 }
