@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   ### Removed       — removed features
 -->
 
+## [1.2.0] - 2026-06-30
+
 ### Added
 
 - Timed motors with a bound physical remote now track position in Home Assistant when the remote is used: the position loop starts automatically on a remote open or close press (including jog presses) and latches the best-effort elapsed-time position on a remote stop press.
@@ -63,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Stick status sensors (connection status, firmware version, mode)
 - HACS-compatible via zip_release delivery
 
-[unreleased]: https://github.com/hrabbach/ha-schellenberg-usb-plus/compare/v1.1.0...HEAD
+[unreleased]: https://github.com/hrabbach/ha-schellenberg-usb-plus/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.2.0
 [1.1.0]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.1.0
 [1.0.0]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.0.0
