@@ -490,3 +490,46 @@ async def test_gate_1_5_does_not_suppress_normal_routing(
     assert result == "REM001"
     # Triple dispatch must still have fired (Gate 3 was not suppressed by Gate 1.5)
     assert mock_send.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_gate_1_5_burst_tail_does_not_resolve_second_capture(
+    hass: HomeAssistant,
+) -> None:
+    """CR-01: a single press's burst tail must NOT resolve a SECOND capture.
+
+    A single physical press emits a ~9-frame RF burst that all share ONE
+    incrementor. After the first capture resolves and the learn-by-press flow
+    opens the second capture window (D-06 double-press safeguard), the leftover
+    burst frames (same device_id + same incrementor) must be ignored — otherwise
+    one press falsely satisfies the second capture and binds after a single
+    press. A genuine second press carries a NEW incrementor and DOES resolve it.
+    """
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+
+    # First capture (listen_first): burst frame 1 (incr=ABCD) resolves it.
+    first_task = asyncio.create_task(
+        api.learn_remote_raw_and_wait(timeout=5.0)
+    )
+    await asyncio.sleep(0)
+    api._handle_message("ss10REM001ABCD01PP00")
+    assert await first_task == "REM001"
+
+    # Second capture (listen_second) opens immediately, as the flow does.
+    second_task = asyncio.create_task(
+        api.learn_remote_raw_and_wait(timeout=5.0)
+    )
+    await asyncio.sleep(0)
+
+    # Burst tail of the SAME press (same incr=ABCD) must NOT resolve it.
+    api._handle_message("ss10REM001ABCD01PP00")
+    api._handle_message("ss10REM001ABCD01PP00")
+    await asyncio.sleep(0)
+    assert not second_task.done(), (
+        "burst-tail frame of the first press falsely resolved the second "
+        "capture future — D-06 double-press defeated (CR-01)"
+    )
+
+    # A genuine second press (NEW incrementor) resolves the second capture.
+    api._handle_message("ss10REM001EFGH01PP00")
+    assert await second_task == "REM001"

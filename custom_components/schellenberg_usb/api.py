@@ -128,6 +128,16 @@ class SchellenbergUsbApi:
         # Phase 15: raw-capture future — resolves on ANY device press regardless of
         # registration status; used by learn_remote_raw_and_wait() (D-07).
         self._learn_remote_raw_future: asyncio.Future[str] | None = None
+        # Phase 15 CR-01: burst-tail guard for raw learn-capture. A single
+        # physical press emits a ~9-frame RF burst that all share ONE
+        # incrementor. Without this guard, leftover frames of the first press
+        # would resolve the SECOND capture future and falsely satisfy the D-06
+        # double-press safeguard. Records the (device_id, incrementor) and
+        # loop.time() of the frame that last resolved a raw-capture future; a
+        # same-key frame within REMOTE_DEDUP_WINDOW is treated as burst tail and
+        # ignored. A genuine second press carries a NEW incrementor and passes.
+        self._learn_remote_raw_last_key: tuple[str, str] | None = None
+        self._learn_remote_raw_last_time: float = 0.0
         # Incrementor dedup cache: (device_id, incrementor) → loop.time() of last seen
         self._dedup_cache: dict[tuple[str, str], float] = {}
         # TimerHandles for dedup quiet-period resets (keyed by (device_id, incrementor))
@@ -443,18 +453,39 @@ class SchellenbergUsbApi:
                 # suppressed.)
                 # CRITICAL: no `return` here — all existing gates 2/3/4/final dispatch
                 # continue byte-for-byte unchanged (RMT-07).
+                # CR-01: a frame matching the (device_id, incrementor) that last
+                # resolved a raw capture, within REMOTE_DEDUP_WINDOW, is a burst-tail
+                # repeat of the SAME physical press — ignore it so it cannot resolve the
+                # second capture future and defeat the D-06 double-press safeguard. A
+                # real second press carries a new incrementor and is never suppressed.
                 if (
                     self._learn_remote_raw_future
                     and not self._learn_remote_raw_future.done()
                 ):
-                    _LOGGER.info(
-                        "learn_remote_raw: captured device %s (registered=%s)",
-                        device_id,
-                        device_id in self._registered_devices,
-                    )
-                    self._safe_resolve_future(
-                        self._learn_remote_raw_future, device_id
-                    )
+                    raw_key = (device_id, incrementor)
+                    raw_now = self.hass.loop.time()
+                    if (
+                        self._learn_remote_raw_last_key == raw_key
+                        and (raw_now - self._learn_remote_raw_last_time)
+                        < REMOTE_DEDUP_WINDOW
+                    ):
+                        _LOGGER.debug(
+                            "learn_remote_raw: ignoring burst-tail frame %s"
+                            " incr=%s (same press, %.3fs ago)",
+                            device_id, incrementor,
+                            raw_now - self._learn_remote_raw_last_time,
+                        )
+                    else:
+                        _LOGGER.info(
+                            "learn_remote_raw: captured device %s (registered=%s)",
+                            device_id,
+                            device_id in self._registered_devices,
+                        )
+                        self._learn_remote_raw_last_key = raw_key
+                        self._learn_remote_raw_last_time = raw_now
+                        self._safe_resolve_future(
+                            self._learn_remote_raw_future, device_id
+                        )
                     # Do NOT return — existing routing/dedup/dispatch continues unchanged.
 
                 # Compute-once: remote routing discriminator + dedup-scope flags
