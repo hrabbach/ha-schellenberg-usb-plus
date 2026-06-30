@@ -257,16 +257,25 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
     async def async_step_menu(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
-        """Show menu: Pair automatically or Add manually.
+        """Show menu: Pair automatically, Add manually, or Delegate.
 
         async_show_menu(step_id="menu") REQUIRES a matching async_step_menu
-        method to exist — HA validates that a shown step_id resolves to a handler
-        (it raises UnknownStep otherwise). Selecting an option routes to
-        async_step_{option}: 'pair' or 'manual_add'.
+        method to exist — HA validates that a shown step_id resolves to a
+        handler (it raises UnknownStep otherwise). Selecting an option routes
+        to async_step_{option}: 'pair', 'manual_add', or 'delegate'.
         """
+        # Reset the per-flow pending state at the menu (the single re-entry
+        # point for every branch) so a value populated by one branch — e.g.
+        # a delegation-populated _pending_device_id — cannot leak into another
+        # branch's guard if the user backs up to the menu and picks a
+        # different option (WR-03 state hygiene).
+        self._pending_device_id = None
+        self._pending_device_enum = None
+        self._pending_device_name = None
+        self._pending_is_bidirectional = False
         return self.async_show_menu(
             step_id="menu",
-            menu_options=["pair", "manual_add"],
+            menu_options=["pair", "manual_add", "delegate"],
         )
 
     async def async_step_manual_add(
@@ -385,6 +394,183 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
             last_step=True,
         )
 
+    async def async_step_delegate(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Delegation pairing: show P-button → Stop instructions, then transmit.
+
+        On first call (user_input is None) renders the instruction form so the
+        user can put the motor into learn mode. On submit, advances directly
+        to the transmit step where the handshake fires (D-03/D-04).
+        The detailed step-by-step copy lives in strings.json under
+        step_id='delegate' (Plan 03) — no UI copy is hardcoded here.
+        """
+        if user_input is None:
+            return self.async_show_form(
+                step_id="delegate",
+                data_schema=vol.Schema({}),
+            )
+        return await self.async_step_delegate_transmit()
+
+    async def async_step_delegate_transmit(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Delegation transmit: fire api.delegation_pair() on submit.
+
+        Renders a confirm form (no-schema) on first call. On submit:
+          1. Calls api.abort_delegation_pair() to clear any stale future (D-09).
+          2. Calls api.delegation_pair() and on success advances to the name
+             step (via async_step_delegate_name).
+          3. On DeviceLimitReached: re-shows this form with device_limit_reached.
+          4. On ConnectionError/OSError: re-shows this form with delegation_failed
+             (retry-in-place, NOT async_abort — D-09/PAIR-04).
+        """
+        if user_input is None:
+            return self.async_show_form(
+                step_id="delegate_transmit",
+                data_schema=vol.Schema({}),
+            )
+
+        hub_entry = self._get_entry()
+        api = hub_entry.runtime_data
+
+        # runtime_data is only populated while the hub entry is LOADED. If the
+        # stick is unplugged at HA start, the entry is in SETUP_RETRY, or the
+        # integration is mid-reload, runtime_data is None and dereferencing it
+        # would raise AttributeError and crash the subentry flow (WR-02).
+        # Surface a friendly retry-in-place error instead.
+        if api is None:
+            _LOGGER.warning(
+                "Delegation attempted while hub entry not loaded"
+            )
+            return self.async_show_form(
+                step_id="delegate_transmit",
+                data_schema=vol.Schema({}),
+                errors={"base": "delegation_failed"},
+            )
+
+        # D-09 / Pitfall-11: clear stale future BEFORE each attempt
+        api.abort_delegation_pair()
+
+        try:
+            device_id, device_enum = await api.delegation_pair()
+        except DeviceLimitReached:
+            return self.async_show_form(
+                step_id="delegate_transmit",
+                data_schema=vol.Schema({}),
+                errors={"base": "device_limit_reached"},
+            )
+        except (ConnectionError, OSError):
+            _LOGGER.warning(
+                "Delegation pairing failed — connection error; user may retry"
+            )
+            return self.async_show_form(
+                step_id="delegate_transmit",
+                data_schema=vol.Schema({}),
+                errors={"base": "delegation_failed"},
+            )
+
+        _LOGGER.info(
+            "Delegation pairing succeeded: device_id=%s enum=%s",
+            device_id,
+            device_enum,
+        )
+        self._pending_device_id = device_id
+        self._pending_device_enum = device_enum
+        self._pending_device_name = None
+        return await self.async_step_delegate_name()
+
+    async def async_step_delegate_name(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Delegation name collection: ask for a friendly device name.
+
+        Mirrors async_step_name_device WITHOUT the calibration hand-off (D-07:
+        lean create — calibrate later via reconfigure). Advances to the
+        separate position step on submit (LOCKED split shape, REVIEWS finding 3).
+        """
+        if user_input is None:
+            return self.async_show_form(
+                step_id="delegate_name",
+                data_schema=vol.Schema(
+                    {
+                        vol.Optional("device_name"): selector.TextSelector(),
+                    }
+                ),
+            )
+
+        device_enum = self._pending_device_enum or ""
+        device_name = (
+            user_input.get("device_name")
+            or f"Blind {device_enum}"
+        )
+        self._pending_device_name = device_name
+        return await self.async_step_delegate_position()
+
+    async def async_step_delegate_position(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Delegation position slider: set initial position then create subentry.
+
+        Defensive guard mirrors async_step_manual_position (abort on missing
+        enum). Creates a timed (CONF_BIDIRECTIONAL=False) subentry with zero
+        inbound frames — no ACK awaited (PAIR-03/D-06/D-07).
+        The 'test by pressing Open in HA' honesty note (D-08) lives in
+        strings.json under the 'delegate_position' step description (Plan 03).
+        Uses the same data shape as async_step_manual_position so cover.py
+        entity creation logic works identically.
+        """
+        if not self._pending_device_enum:
+            return self.async_abort(reason="pairing_failed")
+
+        if user_input is not None:
+            initial_position = max(
+                0, min(100, int(user_input.get("initial_position", 100)))
+            )
+            device_enum = self._pending_device_enum
+            device_name = (
+                self._pending_device_name or f"Blind {device_enum}"
+            )
+            _LOGGER.info(
+                "Creating delegation subentry for enum %s"
+                " at initial position %d%%",
+                device_enum,
+                initial_position,
+            )
+            return self.async_create_entry(
+                title=device_name,
+                data={
+                    CONF_DEVICE_ID: device_enum,
+                    "device_enum": device_enum,
+                    CONF_BIDIRECTIONAL: False,
+                    CONF_INITIAL_POSITION: initial_position,
+                },
+                unique_id=device_enum,
+            )
+
+        return self.async_show_form(
+            step_id="delegate_position",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        "initial_position", default=100
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0,
+                            max=100,
+                            step=1,
+                            unit_of_measurement="%",
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                }
+            ),
+            description_placeholders={
+                "device_name": self._pending_device_name or "",
+            },
+            last_step=True,
+        )
+
     async def async_step_pair(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
@@ -397,6 +583,20 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         # Get the hub entry (parent config entry)
         hub_entry = self._get_entry()
         api = hub_entry.runtime_data
+
+        # runtime_data is only populated while the hub entry is LOADED — guard
+        # against an unloaded hub (stick unplugged, SETUP_RETRY, mid-reload) so
+        # we surface a friendly retry rather than crashing with AttributeError
+        # (WR-02, mirrors async_step_delegate_transmit).
+        if api is None:
+            _LOGGER.warning(
+                "Pairing attempted while hub entry not loaded"
+            )
+            return self.async_show_form(
+                step_id="pair",
+                data_schema=vol.Schema({}),
+                errors={"base": "pairing_failed"},
+            )
 
         # Initiate pairing and wait for response (up to 10 seconds)
         try:

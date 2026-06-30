@@ -45,7 +45,8 @@
           "title": "Añadir una persiana",
           "menu_options": {
             "pair": "Emparejar automáticamente",
-            "manual_add": "Añadir manualmente (ya emparejado)"
+            "manual_add": "Añadir manualmente (ya emparejado)",
+            "delegate": "Emparejar un motor que ya está emparejado con un mando"
           }
         },
         "manual_add": {
@@ -60,6 +61,30 @@
         "manual_position": {
           "title": "Establecer posición inicial",
           "description": "¿Dónde está {device_name} ahora mismo? Esto establece la posición de inicio para el control deslizante. Nota: la posición para motores temporizados usa un tiempo de desplazamiento predeterminado y no está calibrada hasta que se realice la calibración.",
+          "data": {
+            "initial_position": "Posición actual"
+          }
+        },
+        "delegate": {
+          "title": "Poner el motor en modo aprendizaje",
+          "description": "Para emparejar un motor que ya responde a un mando, primero debe ponerlo en modo aprendizaje:\n\n1. Pulse el botón **P** (programa) en la parte trasera de su mando.\n2. Pulse **Stop** en el mando — el motor hará una pequeña sacudida para confirmar que está en modo aprendizaje.\n3. En cuanto vea la sacudida del motor, pulse Siguiente en menos de 30 segundos.",
+          "submit": "Siguiente"
+        },
+        "delegate_transmit": {
+          "title": "Enviar comando de emparejamiento",
+          "description": "El motor está en modo aprendizaje. Haga clic en Transmitir para enviar el protocolo de enlace de emparejamiento desde Home Assistant. El motor hará otra sacudida para confirmar el nuevo comando.",
+          "submit": "Transmitir"
+        },
+        "delegate_name": {
+          "title": "Nombrar el motor",
+          "description": "Asigne un nombre descriptivo a este motor para identificarlo fácilmente en Home Assistant.",
+          "data": {
+            "device_name": "Nombre del dispositivo"
+          }
+        },
+        "delegate_position": {
+          "title": "Establecer posición inicial",
+          "description": "Comando de emparejamiento enviado. Un motor silencioso no puede confirmar si funcionó — después de guardar, compruebe si {device_name} se mueve al pulsar Abrir en Home Assistant. Si no se mueve, repita el emparejamiento.\n\n¿Dónde está {device_name} ahora mismo?",
           "data": {
             "initial_position": "Posición actual"
           }
@@ -123,6 +148,7 @@
       "error": {
         "pairing_timeout": "Ningún dispositivo respondió en 2 minutos. Por favor, inténtelo de nuevo y asegúrese de presionar el botón de emparejamiento en su motor de persiana.",
         "pairing_failed": "Error en el emparejamiento.",
+        "delegation_failed": "El comando de emparejamiento falló — el stick no respondió a tiempo, estaba ocupado o se desconectó. Asegúrese de que el motor está en modo aprendizaje e inténtelo de nuevo.",
         "device_limit_reached": "Límite de dispositivos alcanzado. Este stick puede gestionar unos 240 motores y todos los espacios están en uso. Elimine un motor que ya no utilice antes de añadir uno nuevo.",
         "calibration_timeout": "Tiempo de calibración agotado. La persiana tardó más de 5 minutos en completar el movimiento. Por favor, verifique el dispositivo e inténtelo de nuevo.",
         "calibration_start_timeout": "Tiempo de espera agotado para que la persiana comience a moverse. Por favor, asegúrese de que el dispositivo esté correctamente conectado e inténtelo de nuevo.",

@@ -45,7 +45,8 @@
           "title": "Add a blind",
           "menu_options": {
             "pair": "Pair automatically",
-            "manual_add": "Add manually (already paired)"
+            "manual_add": "Add manually (already paired)",
+            "delegate": "Pair a motor that's already paired with a remote"
           }
         },
         "manual_add": {
@@ -60,6 +61,30 @@
         "manual_position": {
           "title": "Set initial position",
           "description": "Where is {device_name} right now? This sets the starting position for the position slider. Note: positioning for timed motors uses a default travel time and is uncalibrated until calibration support is added in a later update.",
+          "data": {
+            "initial_position": "Current position"
+          }
+        },
+        "delegate": {
+          "title": "Put motor in learn mode",
+          "description": "To pair a motor that already responds to a remote, you need to put it in learn mode first:\n\n1. Press the **P** (program) button on the back of your remote.\n2. Press **Stop** on the remote — the motor will jog briefly to confirm it is in learn mode.\n3. Once you see the motor jog, press Next within 30 seconds.",
+          "submit": "Next"
+        },
+        "delegate_transmit": {
+          "title": "Send pairing command",
+          "description": "The motor is in learn mode. Click Transmit to send the pairing handshake from Home Assistant. The motor will jog once more to acknowledge the new command.",
+          "submit": "Transmit"
+        },
+        "delegate_name": {
+          "title": "Name your motor",
+          "description": "Give this motor a friendly name so you can identify it in Home Assistant.",
+          "data": {
+            "device_name": "Device name"
+          }
+        },
+        "delegate_position": {
+          "title": "Set initial position",
+          "description": "Pairing command sent. A silent motor cannot confirm it worked — after saving, test it by pressing Open in Home Assistant. If {device_name} does not move, retry pairing.\n\nWhere is {device_name} right now?",
           "data": {
             "initial_position": "Current position"
           }
@@ -123,6 +148,7 @@
       "error": {
         "pairing_timeout": "No device responded within 2 minutes. Please try again and ensure you press the pairing button on your blind motor.",
         "pairing_failed": "Pairing failed.",
+        "delegation_failed": "Pairing command failed — the stick did not respond in time, was busy, or got disconnected. Make sure the motor is in learn mode, then try again.",
         "device_limit_reached": "Device limit reached. This stick can address about 240 motors and all slots are in use. Remove an unused motor before adding a new one.",
         "calibration_timeout": "Calibration timed out. The blind took more than 5 minutes to complete the movement. Please check the device and try again.",
         "calibration_start_timeout": "Timeout waiting for the blind to start moving. Please ensure the device is properly connected and try again.",

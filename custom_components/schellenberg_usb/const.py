@@ -102,6 +102,15 @@ SIGNAL_REMOTE_EVENT = f"{DOMAIN}_remote_event"
 VERIFY_TIMEOUT = 5  # seconds to wait for verification response
 # Expected response format: RFTU_V20 F:20180510_DFBD B:1
 
+# Delegation pairing constants (Phase 14)
+# Deadline for the CMD_PAIR + CMD_ALLOW_PAIRING handshake: the user is already
+# present and ready, so a short timeout surfaces wedged-handshake errors quickly
+# instead of making the operator wait through the full pairing window (A3).
+DELEGATION_TIMEOUT = 30  # seconds — asyncio.wait_for handshake deadline
+# Visual feedback blink count during the delegation handshake window;
+# 3 blinks are enough to signal activity without overwhelming the user.
+DELEGATION_BLINK_COUNT = 3  # blinks (valid range 1..9 for led_blink)
+
 # Pairing constants
 PAIRING_TIMEOUT = 120  # seconds to wait for pairing response
 PAIRING_DEVICE_ENUM_START = 0x10  # Start from 0x10 for new devices

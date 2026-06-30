@@ -43,6 +43,8 @@ from .const import (
     CMD_TRANSMIT,
     CMD_UP,
     CMD_VERIFY,
+    DELEGATION_BLINK_COUNT,
+    DELEGATION_TIMEOUT,
     DEVICE_ID_TIMEOUT,
     HEARTBEAT_INTERVAL,
     HEARTBEAT_MISS_THRESHOLD,
@@ -113,6 +115,10 @@ class SchellenbergUsbApi:
 
         # Hub options (live-applied from entry.options by __init__.py)
         self._ignore_unknown: bool = False
+
+        # Delegation pairing (Phase 14) — dedicated future for the CMD_PAIR +
+        # CMD_ALLOW_PAIRING handshake; NEVER reuses _pairing_future.
+        self._delegation_future: asyncio.Future[tuple[str, str]] | None = None
 
         # Remote coexistence (v1.3)
         # reverse-lookup: remote_device_id → motor_device_id
@@ -550,7 +556,13 @@ class SchellenbergUsbApi:
             except (IndexError, ValueError) as err:
                 _LOGGER.debug("Failed to parse message %s: %s", message, err)
 
-    async def send_command(self, command: str, *, track_traffic: bool = True) -> None:
+    async def send_command(
+        self,
+        command: str,
+        *,
+        track_traffic: bool = True,
+        track_retry: bool = True,
+    ) -> None:
         """Send a command to the USB stick."""
         if self._transport is None or self._transport.is_closing():
             _LOGGER.warning("Serial port not connected. Command dropped: %s", command)
@@ -558,7 +570,11 @@ class SchellenbergUsbApi:
 
         # Capture in-flight command BEFORE write — no await between capture and
         # write (single event-loop tick guarantee for tE correlation).
-        self._in_flight_command = command
+        # track_retry=False callers (handshake frames) skip the capture so a
+        # late tE cannot enqueue a re-fire outside the ~10s learn window
+        # (REVIEWS finding 1 — Pitfall 2).
+        if track_retry:
+            self._in_flight_command = command
 
         full_command = f"{command}\r\n".encode("ascii")
         _LOGGER.debug("Sending to serial device: %s", full_command.strip())
@@ -704,6 +720,159 @@ class SchellenbergUsbApi:
             return (device_id, device_enum)
         finally:
             self._pairing_future = None
+
+    async def _run_delegation_handshake(self, device_enum: str) -> None:
+        """Drive the CMD_PAIR → CMD_ALLOW_PAIRING handshake for delegation.
+
+        Called exclusively from delegation_pair() under asyncio.wait_for so
+        a wedged handshake is bounded by DELEGATION_TIMEOUT.
+
+        Both frames are sent with track_retry=False so the retry queue never
+        captures a handshake command — a late tE cannot re-fire CMD_PAIR or
+        CMD_ALLOW_PAIRING after the ~10s motor learn window (REVIEWS finding 1,
+        Pitfall 2).
+        """
+        # Visual feedback: blink before the handshake window opens.
+        await self.led_blink(DELEGATION_BLINK_COUNT)
+
+        # Check for disconnect that arrived before or during led_blink —
+        # send_command returns silently on a closing transport, so we MUST
+        # poll is_connected ourselves (REVIEWS finding 2).
+        if not self.is_connected:
+            raise ConnectionError(
+                "Serial port disconnected before CMD_PAIR"
+            )
+
+        # Send CMD_PAIR frame (retry-queue bypassed — track_retry=False).
+        pair_command = (
+            f"{CMD_TRANSMIT}{device_enum}9{CMD_PAIR}0000"
+        )
+        _LOGGER.debug(
+            "Delegation handshake CMD_PAIR for enum %s: %s",
+            device_enum,
+            pair_command,
+        )
+        await self.send_command(pair_command, track_retry=False)
+
+        # Check for disconnect that landed between the two handshake commands —
+        # without this guard a mid-handshake disconnect would silently return
+        # a false-success (enum, enum) tuple (REVIEWS finding 2, D-09).
+        if not self.is_connected:
+            raise ConnectionError(
+                "Serial port disconnected between CMD_PAIR and"
+                " CMD_ALLOW_PAIRING"
+            )
+
+        # Send CMD_ALLOW_PAIRING via the existing framer (additive track_retry
+        # keyword threaded through allow_pairing_on_device — REVIEWS finding 1,
+        # blocker 1; the default True preserves all other callers).
+        _LOGGER.debug(
+            "Delegation handshake CMD_ALLOW_PAIRING for enum %s",
+            device_enum,
+        )
+        await self.allow_pairing_on_device(
+            device_enum, track_retry=False
+        )
+
+        # Final connectivity guard — catches a disconnect arriving after the
+        # second frame was queued but before the coroutine returns.
+        if not self.is_connected:
+            raise ConnectionError(
+                "Serial port disconnected after CMD_ALLOW_PAIRING"
+            )
+
+    async def delegation_pair(self) -> tuple[str, str]:
+        """Drive the delegation-pairing handshake for a silent (timed) motor.
+
+        Sends CMD_PAIR then CMD_ALLOW_PAIRING with retry-queue bypass so
+        neither frame can be re-fired by a late tE after the ~10s motor learn
+        window. Returns immediately without waiting for any inbound frame — a
+        silent motor never sends one (Pitfall 3).
+
+        Returns:
+            (device_id, device_enum) where device_id == device_enum (the
+            enumerator is used as the stable device identifier for timed motors,
+            matching the shape cover.py reads from subentry.data).
+
+        Raises:
+            RuntimeError: if another delegation is already in progress.
+            DeviceLimitReached: if all 240 enum slots are occupied.
+            ConnectionError: if the serial port disconnects during the handshake.
+        """
+        if self._delegation_future and not self._delegation_future.done():
+            _LOGGER.warning(
+                "Delegation pairing already in progress — aborting new attempt"
+            )
+            raise RuntimeError("Delegation pairing already in progress")
+
+        device_enum = self.initialize_next_device_enum()
+        if device_enum is None:
+            _LOGGER.warning(
+                "Device enum limit reached — cannot start delegation pairing"
+            )
+            raise DeviceLimitReached
+
+        _LOGGER.info(
+            "Starting delegation pairing for device enum %s", device_enum
+        )
+
+        # Create the dedicated future (lifecycle: created here, cleared in
+        # finally, and drained by update_connection_status on disconnect).
+        # It is NEVER awaited for an inbound frame (Pitfall 3 — silent motors
+        # send none); it exists purely for the in-progress concurrency guard
+        # above and for lifecycle/drain symmetry.
+        self._delegation_future = (
+            asyncio.get_running_loop().create_future()
+        )
+        # Because nothing awaits this future, a drain that calls
+        # set_exception (disconnect via update_connection_status, or
+        # abort_delegation_pair) would otherwise be garbage-collected with an
+        # unretrieved exception, which asyncio logs as a spurious
+        # "Future exception was never retrieved" warning + traceback in the HA
+        # log (WR-01). Retrieve the exception in a done-callback to silence it;
+        # recovery itself is driven by the is_connected polls + wait_for
+        # deadline, not by this future.
+        self._delegation_future.add_done_callback(
+            lambda f: f.cancelled() or f.exception()
+        )
+
+        try:
+            await asyncio.wait_for(
+                self._run_delegation_handshake(device_enum),
+                timeout=DELEGATION_TIMEOUT,
+            )
+        except (ConnectionError, OSError):
+            # Re-raise so the config-flow retry-in-place branch sees a real
+            # disconnect signal rather than a None return (D-09).
+            raise
+        except TimeoutError as err:
+            # Map the wait_for deadline to ConnectionError so the flow's
+            # (ConnectionError, OSError) handler covers it uniformly (D-09).
+            raise ConnectionError(
+                "Delegation handshake timed out after %s s"
+                % DELEGATION_TIMEOUT
+            ) from err
+        else:
+            _LOGGER.info(
+                "Delegation pairing completed for enum %s", device_enum
+            )
+            # device_id == device_enum: timed motors have no inbound ID frame;
+            # using the enum as device_id matches the manual-add subentry shape.
+            return (device_enum, device_enum)
+        finally:
+            # Always clear the future so the next attempt gets a fresh one and
+            # abort_delegation_pair() becomes a safe no-op (lifecycle close).
+            self._delegation_future = None
+
+    def abort_delegation_pair(self) -> None:
+        """Cancel any in-flight delegation pairing and clear the future.
+
+        Safe to call when no pairing is active (no-op). Called by the config
+        flow before each retry attempt and on flow abort (D-09, P11).
+        """
+        err = ConnectionError("Delegation pairing aborted")
+        self._safe_resolve_future(self._delegation_future, exception=err)
+        self._delegation_future = None
 
     async def _stop_pairing_mode(self, delay: bool = False) -> None:
         """Stop pairing mode by sending a stop command to the stick.
@@ -1003,6 +1172,7 @@ class SchellenbergUsbApi:
             self._safe_resolve_future(self._verify_future, exception=err)
             self._safe_resolve_future(self._device_id_future, exception=err)
             self._safe_resolve_future(self._learn_remote_future, exception=err)
+            self._safe_resolve_future(self._delegation_future, exception=err)
             # Teardown dedup timers (idempotent — clearing an empty dict is a no-op)
             for handle in self._dedup_handles.values():
                 handle.cancel()
@@ -1106,18 +1276,26 @@ class SchellenbergUsbApi:
         _LOGGER.debug("Setting lower endpoint for device %s: %s", device_enum, command)
         await self.send_command(command)
 
-    async def allow_pairing_on_device(self, device_enum: str) -> None:
+    async def allow_pairing_on_device(
+        self,
+        device_enum: str,
+        *,
+        track_retry: bool = True,
+    ) -> None:
         """Make a device listen to a new remote's ID.
 
         Args:
             device_enum: The device enumerator (hex string like "10")
+            track_retry: When False, the CMD_ALLOW_PAIRING frame bypasses the
+                retry-queue capture so a late tE cannot re-fire the handshake
+                outside the ~10s learn window (REVIEWS finding 1).
 
         """
         # Format: ssXX9AAZZZ
         # XX = device enum, 9 = number of messages, AA = command, ZZZ = padding
         command = f"{CMD_TRANSMIT}{device_enum}9{CMD_ALLOW_PAIRING}0000"
         _LOGGER.debug("Allowing pairing on device %s: %s", device_enum, command)
-        await self.send_command(command)
+        await self.send_command(command, track_retry=track_retry)
 
     async def manual_up(self, device_enum: str) -> None:
         """Manually move blind up (simulates holding button).
