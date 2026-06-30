@@ -425,6 +425,21 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         hub_entry = self._get_entry()
         api = hub_entry.runtime_data
 
+        # runtime_data is only populated while the hub entry is LOADED. If the
+        # stick is unplugged at HA start, the entry is in SETUP_RETRY, or the
+        # integration is mid-reload, runtime_data is None and dereferencing it
+        # would raise AttributeError and crash the subentry flow (WR-02).
+        # Surface a friendly retry-in-place error instead.
+        if api is None:
+            _LOGGER.warning(
+                "Delegation attempted while hub entry not loaded"
+            )
+            return self.async_show_form(
+                step_id="delegate_transmit",
+                data_schema=vol.Schema({}),
+                errors={"base": "delegation_failed"},
+            )
+
         # D-09 / Pitfall-11: clear stale future BEFORE each attempt
         api.abort_delegation_pair()
 
@@ -559,6 +574,20 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         # Get the hub entry (parent config entry)
         hub_entry = self._get_entry()
         api = hub_entry.runtime_data
+
+        # runtime_data is only populated while the hub entry is LOADED — guard
+        # against an unloaded hub (stick unplugged, SETUP_RETRY, mid-reload) so
+        # we surface a friendly retry rather than crashing with AttributeError
+        # (WR-02, mirrors async_step_delegate_transmit).
+        if api is None:
+            _LOGGER.warning(
+                "Pairing attempted while hub entry not loaded"
+            )
+            return self.async_show_form(
+                step_id="pair",
+                data_schema=vol.Schema({}),
+                errors={"base": "pairing_failed"},
+            )
 
         # Initiate pairing and wait for response (up to 10 seconds)
         try:
