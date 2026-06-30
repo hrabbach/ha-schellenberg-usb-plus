@@ -1,0 +1,882 @@
+"""Tests for the Phase 15 learn-by-press remote binding flow (RMT-01/02/03).
+
+Coverage:
+  - Adaptive reconfigure menu routing (D-01/D-02, REVIEW finding 3)
+  - Capture-state reset on menu re-entry (REVIEW finding 2 + 4)
+  - First-press capture with progress sequence (RMT-01, D-03)
+  - Timeout / disconnect distinct copy with _listen_error_key carry (D-05)
+  - Double-press match -> confirm, mismatch -> retry (D-06)
+  - Binding policy: motor rejection (Case A) + already-bound rejection (Case B)
+    with _listen_error_key carry vars (D-07, REVIEW finding 4)
+  - Re-press of own remote during change is allowed (Case C, D-10)
+  - Confirm is a TWO-option menu (REVIEW finding 1, D-08/RMT-02)
+  - Confirm-Apply persists via async_update_subentry + schedule_reload + abort
+  - Retry path does NOT persist
+  - Change reuses listen_confirm step; NO async_step_change_confirm (REVIEW 6)
+  - Change overwrites remote_id (D-10)
+  - Remove confirm is a TWO-option menu (REVIEW finding 1, D-09)
+  - Remove-Apply deletes CONF_REMOTE_ID key (RMT-03/D-09)
+
+Test environment note: hass.async_create_task() in the HA pytest harness causes
+the underlying AsyncMock coroutine to resolve within the same event loop
+iteration — so the first call to async_step_listen_first/second sees the task
+already done and returns SHOW_PROGRESS_DONE directly. Tests are written to
+reflect this synchronous-resolution behaviour.
+
+All tests pin the decision IDs / REVIEW findings they verify in their docstring.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from types import MappingProxyType
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
+
+from custom_components.schellenberg_usb.config_flow import (
+    SchellenbergPairingSubentryFlow,
+)
+from custom_components.schellenberg_usb.const import (
+    CONF_BIDIRECTIONAL,
+    CONF_REMOTE_ID,
+    CONF_SERIAL_PORT,
+    DOMAIN,
+    SUBENTRY_TYPE_BLIND,
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers / fixtures
+# ---------------------------------------------------------------------------
+
+
+def _make_reconfigure_handler(
+    hass: HomeAssistant, entry_id: str, subentry_id: str = "sub1"
+) -> SchellenbergPairingSubentryFlow:
+    """Create a reconfigure-context flow handler for Phase 15 tests.
+
+    ConfigSubentryFlow._get_entry() reads self.handler[0].
+    ConfigSubentryFlow._get_reconfigure_subentry() reads
+    self.context["subentry_id"].
+    """
+    handler = SchellenbergPairingSubentryFlow()
+    handler.hass = hass
+    handler.handler = (entry_id, SUBENTRY_TYPE_BLIND)
+    handler.context = {"source": "reconfigure", "subentry_id": subentry_id}
+    return handler
+
+
+@pytest.fixture
+def mock_hub_entry(hass: HomeAssistant) -> ConfigEntry:
+    """Create a mock hub ConfigEntry registered with hass, with a mock api."""
+    entry = ConfigEntry(
+        version=1,
+        domain=DOMAIN,
+        title="Schellenberg USB",
+        data={CONF_SERIAL_PORT: "/dev/ttyUSB0"},
+        options={},
+        entry_id="test_remote_bind_entry",
+        state=ConfigEntryState.NOT_LOADED,
+        minor_version=1,
+        source="test",
+        unique_id=None,
+        discovery_keys=MappingProxyType({}),
+        subentries_data=None,
+    )
+    hass.config_entries._entries[entry.entry_id] = entry
+    mock_api = MagicMock()
+    mock_api.learn_remote_raw_and_wait = AsyncMock(return_value="AABBCC")
+    mock_api._registered_devices = {}
+    mock_api._remote_to_motor = {}
+    mock_api.is_connected = True
+    entry.runtime_data = mock_api  # type: ignore[attr-defined]
+    return entry
+
+
+def _make_no_remote_subentry() -> MagicMock:
+    """Subentry without a bound remote (bind path)."""
+    subentry = MagicMock()
+    subentry.data = {
+        "device_id": "ABCDEF",
+        "device_enum": "1A",
+        CONF_BIDIRECTIONAL: False,
+    }
+    subentry.title = "Test Blind"
+    return subentry
+
+
+def _make_with_remote_subentry(remote_id: str = "112233") -> MagicMock:
+    """Subentry with an existing bound remote (change/remove path)."""
+    subentry = MagicMock()
+    subentry.data = {
+        "device_id": "ABCDEF",
+        "device_enum": "1A",
+        CONF_BIDIRECTIONAL: False,
+        CONF_REMOTE_ID: remote_id,
+    }
+    subentry.title = "Test Blind"
+    return subentry
+
+
+def _extract_persisted_data(mock_upd: MagicMock) -> dict:
+    """Extract data dict from an async_update_subentry mock call.
+
+    Handles both keyword-argument (data=...) and positional (args[2]) call forms.
+    """
+    call_kwargs = mock_upd.call_args[1] if mock_upd.call_args[1] else {}
+    call_args = mock_upd.call_args[0]
+    if "data" in call_kwargs:
+        return dict(call_kwargs["data"])
+    if len(call_args) >= 3:
+        return dict(call_args[2])
+    return {}
+
+
+async def _drive_listen_first(
+    handler: SchellenbergPairingSubentryFlow,
+    subentry: MagicMock,
+    entry: ConfigEntry,
+) -> None:
+    """Drive async_step_listen_first to completion.
+
+    In the HA pytest harness AsyncMock tasks resolve synchronously so a single
+    call with one event-loop tick is sufficient to reach SHOW_PROGRESS_DONE.
+    """
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(handler, "_get_entry", return_value=entry):
+        result = await handler.async_step_listen_first(None)
+        if result["type"] == FlowResultType.SHOW_PROGRESS:
+            # Task not yet done — give the event loop one tick
+            await asyncio.sleep(0)
+            result = await handler.async_step_listen_first(None)
+
+
+async def _drive_listen_second(
+    handler: SchellenbergPairingSubentryFlow,
+    subentry: MagicMock,
+    entry: ConfigEntry,
+) -> None:
+    """Drive async_step_listen_second to completion."""
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(handler, "_get_entry", return_value=entry):
+        result = await handler.async_step_listen_second(None)
+        if result["type"] == FlowResultType.SHOW_PROGRESS:
+            await asyncio.sleep(0)
+            await handler.async_step_listen_second(None)
+
+
+# ---------------------------------------------------------------------------
+# Adaptive menu routing (D-01/D-02, REVIEW finding 3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_menu_no_binding_shows_bind(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """async_step_reconfigure on a subentry without remote_id shows bind_remote.
+
+    Calls async_step_reconfigure DIRECTLY (REVIEW finding 3) so menu-routing
+    coverage is not bypassed by the pinned-test calibrate-substitution edits.
+    Pins: D-01 (adaptive menu entry), D-02 (no remote -> bind option).
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_no_remote_subentry()
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ):
+        result = await handler.async_step_reconfigure(None)
+
+    assert result["type"] == "menu", (
+        f"Expected menu, got {result['type']!r}"
+    )
+    assert "bind_remote" in result["menu_options"], (
+        f"bind_remote missing from {result['menu_options']}"
+    )
+    assert "calibrate" in result["menu_options"]
+    assert "change_remote" not in result["menu_options"]
+    assert "remove_remote" not in result["menu_options"]
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_menu_with_binding_shows_change_remove(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """async_step_reconfigure on a subentry WITH remote_id shows change+remove.
+
+    Calls async_step_reconfigure DIRECTLY (REVIEW finding 3).
+    Pins: D-01 (adaptive menu entry), D-02 (has remote -> change/remove).
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_with_remote_subentry()
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ):
+        result = await handler.async_step_reconfigure(None)
+
+    assert result["type"] == "menu"
+    assert "change_remote" in result["menu_options"]
+    assert "remove_remote" in result["menu_options"]
+    assert "calibrate" in result["menu_options"]
+    assert "bind_remote" not in result["menu_options"]
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_menu_resets_capture_state(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """async_step_reconfigure_menu resets all capture state and re-shows menu.
+
+    Seeds stale capture state (including a done task) and verifies that
+    async_step_reconfigure_menu clears it all (REVIEW finding 2 + finding 4).
+    Uses a DONE (not pending) task to avoid cross-loop cancellation timing
+    issues in the test harness.
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_no_remote_subentry()
+
+    # Seed stale state
+    handler._first_capture_id = "STALE1"
+    handler._listen_error_key = "remote_capture_timeout"
+    handler._listen_error_placeholders = {"k": "v"}
+    handler._is_change_mode = True
+
+    # Create a pending task to be cancelled
+    cancel_called = False
+
+    class _FakeTask:
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            nonlocal cancel_called
+            cancel_called = True
+
+    handler._listen_first_task = _FakeTask()  # type: ignore[assignment]
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ):
+        result = await handler.async_step_reconfigure_menu(None)
+
+    # Capture state must be cleared
+    assert handler._first_capture_id is None
+    assert handler._listen_error_key is None
+    assert handler._listen_error_placeholders is None
+    assert handler._is_change_mode is False
+    assert handler._listen_first_task is None
+
+    # cancel() must have been called on the pending task
+    assert cancel_called is True, "Expected cancel() to be called on pending task"
+
+    # Menu must re-show
+    assert result["type"] == "menu"
+    assert "bind_remote" in result["menu_options"]
+
+
+# ---------------------------------------------------------------------------
+# First-press capture sequence (RMT-01, D-03)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_listen_first_captures_id(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """listen_first progress sequence resolves and advances toward listen_second.
+
+    In the HA pytest harness an AsyncMock task may resolve synchronously so the
+    step can return SHOW_PROGRESS_DONE on the first poll. Either SHOW_PROGRESS
+    or SHOW_PROGRESS_DONE is acceptable on the first call; after settling the
+    handler must store _first_capture_id and indicate next_step=listen_second.
+    Pins: RMT-01 (learn-by-press captures remote id).
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_no_remote_subentry()
+    mock_hub_entry.runtime_data.learn_remote_raw_and_wait = AsyncMock(  # type: ignore[union-attr]
+        return_value="AABBCC"
+    )
+    mock_hub_entry.runtime_data._registered_devices = {}  # type: ignore[union-attr]
+    mock_hub_entry.runtime_data._remote_to_motor = {}  # type: ignore[union-attr]
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+        result = await handler.async_step_listen_first(None)
+        if result["type"] == FlowResultType.SHOW_PROGRESS:
+            await asyncio.sleep(0)
+            result = await handler.async_step_listen_first(None)
+
+    # After the task settles the step must advance (SHOW_PROGRESS_DONE)
+    assert result["type"] == FlowResultType.SHOW_PROGRESS_DONE
+    # The captured id must be stored
+    assert handler._first_capture_id == "AABBCC"
+
+
+# ---------------------------------------------------------------------------
+# Timeout / disconnect distinct copy (D-05, REVIEW finding 4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_capture_timeout_shows_retry_no_persist(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """listen_first timeout routes to listen_timeout with remote_capture_timeout.
+
+    Verifies the _listen_error_key carry var is set and rendered (REVIEW finding 4).
+    async_update_subentry must NOT be called.
+    Pins: D-05 (no binding on failure).
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_no_remote_subentry()
+    mock_hub_entry.runtime_data.learn_remote_raw_and_wait = AsyncMock(  # type: ignore[union-attr]
+        return_value=None
+    )
+    mock_hub_entry.runtime_data.is_connected = True  # type: ignore[union-attr]
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+        result = await handler.async_step_listen_first(None)
+        if result["type"] == FlowResultType.SHOW_PROGRESS:
+            await asyncio.sleep(0)
+            result = await handler.async_step_listen_first(None)
+
+    # Must route to listen_timeout with timeout key
+    assert result["type"] == FlowResultType.SHOW_PROGRESS_DONE
+    assert handler._listen_error_key == "remote_capture_timeout"
+
+    # Drive the listen_timeout form (user_input=None path)
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(
+        handler.hass.config_entries, "async_update_subentry"
+    ) as mock_upd:
+        form_result = await handler.async_step_listen_timeout(None)
+
+    assert form_result["type"] == "form"
+    assert form_result["errors"]["base"] == "remote_capture_timeout"
+    mock_upd.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_capture_disconnect_distinct_copy(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """listen_first disconnect routes to listen_timeout with remote_capture_disconnected.
+
+    Verifies that is_connected=False triggers the distinct disconnect error key.
+    Pins: D-05, REVIEW finding 4.
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_no_remote_subentry()
+    mock_hub_entry.runtime_data.learn_remote_raw_and_wait = AsyncMock(  # type: ignore[union-attr]
+        return_value=None
+    )
+    mock_hub_entry.runtime_data.is_connected = False  # type: ignore[union-attr]
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+        result = await handler.async_step_listen_first(None)
+        if result["type"] == FlowResultType.SHOW_PROGRESS:
+            await asyncio.sleep(0)
+            await handler.async_step_listen_first(None)
+
+    assert handler._listen_error_key == "remote_capture_disconnected"
+
+    with patch.object(handler, "_get_reconfigure_subentry", return_value=subentry):
+        form_result = await handler.async_step_listen_timeout(None)
+
+    assert form_result["errors"]["base"] == "remote_capture_disconnected"
+
+
+# ---------------------------------------------------------------------------
+# Double-press verify (D-06)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_double_press_match_reaches_confirm(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """Matching second press reaches listen_confirm (a menu result).
+
+    Uses side_effect to return the first id on the first call and the second
+    (matching) id on the second call to learn_remote_raw_and_wait.
+    Pins: D-06 (double-press verify), RMT-01 (capture success).
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_no_remote_subentry()
+
+    call_count = 0
+
+    async def _mock_capture(timeout: float = 15.0) -> str | None:
+        nonlocal call_count
+        call_count += 1
+        return "AABBCC"  # both presses return the same id
+
+    mock_hub_entry.runtime_data.learn_remote_raw_and_wait = _mock_capture  # type: ignore[union-attr]
+    mock_hub_entry.runtime_data._registered_devices = {}  # type: ignore[union-attr]
+    mock_hub_entry.runtime_data._remote_to_motor = {}  # type: ignore[union-attr]
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+        # Drive listen_first to completion
+        result = await handler.async_step_listen_first(None)
+        if result["type"] == FlowResultType.SHOW_PROGRESS:
+            await asyncio.sleep(0)
+            result = await handler.async_step_listen_first(None)
+        assert result["type"] == FlowResultType.SHOW_PROGRESS_DONE
+        assert handler._first_capture_id == "AABBCC"
+
+        # Drive listen_second to completion (matching press)
+        result2 = await handler.async_step_listen_second(None)
+        if result2["type"] == FlowResultType.SHOW_PROGRESS:
+            await asyncio.sleep(0)
+            result2 = await handler.async_step_listen_second(None)
+        assert result2["type"] == FlowResultType.SHOW_PROGRESS_DONE
+
+        # HA routes to listen_confirm
+        result_confirm = await handler.async_step_listen_confirm(None)
+
+    assert result_confirm["type"] == "menu"
+    assert "listen_confirm_apply" in result_confirm["menu_options"]
+    assert "listen_first" in result_confirm["menu_options"]
+
+
+@pytest.mark.asyncio
+async def test_double_press_mismatch_errors(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """Mismatched second press routes to listen_timeout with remote_press_mismatch.
+
+    First press captures "AABBCC"; second press captures "DDEEFF" (different).
+    Pins: D-06, REVIEW finding 4.
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_no_remote_subentry()
+
+    call_count = 0
+
+    async def _mock_capture(timeout: float = 15.0) -> str | None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return "AABBCC"
+        return "DDEEFF"  # second press: different remote
+
+    mock_hub_entry.runtime_data.learn_remote_raw_and_wait = _mock_capture  # type: ignore[union-attr]
+    mock_hub_entry.runtime_data._registered_devices = {}  # type: ignore[union-attr]
+    mock_hub_entry.runtime_data._remote_to_motor = {}  # type: ignore[union-attr]
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+        # Drive listen_first (first press)
+        result = await handler.async_step_listen_first(None)
+        if result["type"] == FlowResultType.SHOW_PROGRESS:
+            await asyncio.sleep(0)
+            result = await handler.async_step_listen_first(None)
+        assert handler._first_capture_id == "AABBCC"
+
+        # Drive listen_second (second press — mismatch)
+        result2 = await handler.async_step_listen_second(None)
+        if result2["type"] == FlowResultType.SHOW_PROGRESS:
+            await asyncio.sleep(0)
+            result2 = await handler.async_step_listen_second(None)
+
+    assert handler._listen_error_key == "remote_press_mismatch"
+    assert handler._first_capture_id is None
+
+    with patch.object(handler, "_get_reconfigure_subentry", return_value=subentry):
+        form = await handler.async_step_listen_timeout(None)
+
+    assert form["type"] == "form"
+    assert form["errors"]["base"] == "remote_press_mismatch"
+
+
+# ---------------------------------------------------------------------------
+# Binding policy rejections (D-07/SC4, REVIEW finding 4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reject_is_a_motor(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """Captured id that is a registered motor -> listen_timeout with remote_is_motor.
+
+    Pins: D-07 (policy Case A), REVIEW finding 4 (_listen_error_key carry).
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_no_remote_subentry()
+
+    mock_hub_entry.runtime_data.learn_remote_raw_and_wait = AsyncMock(  # type: ignore[union-attr]
+        return_value="AABBCC"
+    )
+    # Case A: id is a registered motor AND not in _remote_to_motor
+    mock_hub_entry.runtime_data._registered_devices = {"AABBCC": "10"}  # type: ignore[union-attr]
+    mock_hub_entry.runtime_data._remote_to_motor = {}  # type: ignore[union-attr]
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(
+        handler, "_get_entry", return_value=mock_hub_entry
+    ), patch.object(
+        handler.hass.config_entries, "async_update_subentry"
+    ) as mock_upd:
+        result = await handler.async_step_listen_first(None)
+        if result["type"] == FlowResultType.SHOW_PROGRESS:
+            await asyncio.sleep(0)
+            result = await handler.async_step_listen_first(None)
+
+    assert result["type"] == FlowResultType.SHOW_PROGRESS_DONE
+    assert handler._listen_error_key == "remote_is_motor"
+    assert handler._listen_error_placeholders is None
+    mock_upd.assert_not_called()
+
+    with patch.object(handler, "_get_reconfigure_subentry", return_value=subentry):
+        form = await handler.async_step_listen_timeout(None)
+
+    assert form["errors"]["base"] == "remote_is_motor"
+
+
+@pytest.mark.asyncio
+async def test_reject_already_bound_elsewhere(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """Captured id bound to a DIFFERENT motor -> listen_timeout with remote_already_bound.
+
+    Verifies that description_placeholders["other_motor_name"] is the other
+    motor's subentry title (REVIEW finding 4 placeholder carry).
+    Pins: D-07 (policy Case B), REVIEW finding 4.
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    # This subentry's motor is "ABCDEF"
+    subentry = _make_no_remote_subentry()
+
+    mock_hub_entry.runtime_data.learn_remote_raw_and_wait = AsyncMock(  # type: ignore[union-attr]
+        return_value="AABBCC"
+    )
+    mock_hub_entry.runtime_data._registered_devices = {}  # type: ignore[union-attr]
+    # "AABBCC" is bound to "OTHERMOT" (a different motor)
+    mock_hub_entry.runtime_data._remote_to_motor = {"AABBCC": "OTHERMOT"}  # type: ignore[union-attr]
+
+    # Register a sibling subentry for the other motor
+    other_subentry = MagicMock()
+    other_subentry.data = {"device_id": "OTHERMOT"}
+    other_subentry.title = "Living Room Blind"
+    mock_hub_entry.subentries = {  # type: ignore[attr-defined]
+        "sub1": subentry,
+        "sub2": other_subentry,
+    }
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(
+        handler, "_get_entry", return_value=mock_hub_entry
+    ), patch.object(
+        handler.hass.config_entries, "async_update_subentry"
+    ) as mock_upd:
+        result = await handler.async_step_listen_first(None)
+        if result["type"] == FlowResultType.SHOW_PROGRESS:
+            await asyncio.sleep(0)
+            result = await handler.async_step_listen_first(None)
+
+    assert result["type"] == FlowResultType.SHOW_PROGRESS_DONE
+    assert handler._listen_error_key == "remote_already_bound"
+    assert handler._listen_error_placeholders == {
+        "other_motor_name": "Living Room Blind"
+    }
+    mock_upd.assert_not_called()
+
+    with patch.object(handler, "_get_reconfigure_subentry", return_value=subentry):
+        form = await handler.async_step_listen_timeout(None)
+
+    assert form["errors"]["base"] == "remote_already_bound"
+    assert form["description_placeholders"]["other_motor_name"] == (
+        "Living Room Blind"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Confirm as two-option menu (REVIEW finding 1, D-08/RMT-02)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_listen_confirm_is_two_option_menu(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """async_step_listen_confirm returns a menu with listen_confirm_apply + listen_first.
+
+    Pins: REVIEW finding 1 (confirm must be async_show_menu, not a form).
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_no_remote_subentry()
+    handler._first_capture_id = "AABBCC"
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ):
+        result = await handler.async_step_listen_confirm(None)
+
+    assert result["type"] == "menu"
+    assert "listen_confirm_apply" in result["menu_options"]
+    assert "listen_first" in result["menu_options"]
+
+
+@pytest.mark.asyncio
+async def test_confirm_apply_persists_remote_id(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """listen_confirm_apply persists CONF_REMOTE_ID via the safe 3-call pattern.
+
+    Pins: RMT-02 (confirm before persist), D-08 (Confirm persist).
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_no_remote_subentry()
+    handler._first_capture_id = "AABBCC"
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(
+        handler, "_get_entry", return_value=mock_hub_entry
+    ), patch.object(
+        handler.hass.config_entries, "async_update_subentry"
+    ) as mock_upd, patch.object(
+        handler.hass.config_entries, "async_schedule_reload"
+    ) as mock_reload:
+        result = await handler.async_step_listen_confirm_apply(None)
+
+    mock_upd.assert_called_once()
+    persisted_data = _extract_persisted_data(mock_upd)
+
+    assert CONF_REMOTE_ID in persisted_data, (
+        f"CONF_REMOTE_ID missing from persisted data: {persisted_data}"
+    )
+    assert persisted_data[CONF_REMOTE_ID] == "AABBCC"
+    mock_reload.assert_called_once_with(mock_hub_entry.entry_id)
+    assert result["type"] == "abort"
+    assert result["reason"] == "reconfigure_successful"
+
+
+@pytest.mark.asyncio
+async def test_retry_does_not_persist(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """The listen_first (Retry) branch of the confirm menu starts capture; NO persist.
+
+    Selecting "listen_first" from the confirm menu re-enters the capture flow.
+    It must NOT call async_update_subentry.
+    Pins: RMT-02 (only Confirm persists, Retry never calls update_subentry).
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_no_remote_subentry()
+    handler._first_capture_id = "AABBCC"
+    mock_hub_entry.runtime_data.learn_remote_raw_and_wait = AsyncMock(  # type: ignore[union-attr]
+        return_value="AABBCC"
+    )
+    mock_hub_entry.runtime_data._registered_devices = {}  # type: ignore[union-attr]
+    mock_hub_entry.runtime_data._remote_to_motor = {}  # type: ignore[union-attr]
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(
+        handler, "_get_entry", return_value=mock_hub_entry
+    ), patch.object(
+        handler.hass.config_entries, "async_update_subentry"
+    ) as mock_upd:
+        # Retry -> re-enters listen_first (spawns new task)
+        result = await handler.async_step_listen_first(None)
+
+    # Must NOT have called update_subentry regardless of task resolution
+    mock_upd.assert_not_called()
+    # Result is either SHOW_PROGRESS (task pending) or SHOW_PROGRESS_DONE
+    assert result["type"] in (
+        FlowResultType.SHOW_PROGRESS,
+        FlowResultType.SHOW_PROGRESS_DONE,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Change reuses listen_confirm; NO async_step_change_confirm (REVIEW finding 6)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_change_reuses_listen_confirm(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """Change path lands on listen_confirm (NOT change_confirm); _is_change_mode=True.
+
+    Verifies REVIEW finding 6: the change path reuses async_step_listen_confirm
+    and NO async_step_change_confirm method exists on the handler.
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_with_remote_subentry("112233")
+    handler._is_change_mode = True
+    handler._first_capture_id = "AABBCC"
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ):
+        result = await handler.async_step_listen_confirm(None)
+
+    # Must be a menu (listen_confirm), not a form or abort
+    assert result["type"] == "menu"
+    # current_remote_id placeholder must be present in the change path
+    assert "current_remote_id" in result.get("description_placeholders", {})
+    assert result["description_placeholders"]["current_remote_id"] == "112233"
+
+    # No change_confirm step must exist (REVIEW finding 6)
+    assert not hasattr(handler, "async_step_change_confirm"), (
+        "async_step_change_confirm must NOT exist (REVIEW finding 6)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_change_overwrites_remote_id(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """Change path confirm-apply overwrites remote_id with the new captured id.
+
+    Pins: D-10 (change overwrites in a single reload), RMT-03.
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_with_remote_subentry("112233")
+    handler._is_change_mode = True
+    handler._first_capture_id = "AABBCC"
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(
+        handler, "_get_entry", return_value=mock_hub_entry
+    ), patch.object(
+        handler.hass.config_entries, "async_update_subentry"
+    ) as mock_upd, patch.object(
+        handler.hass.config_entries, "async_schedule_reload"
+    ) as mock_reload:
+        result = await handler.async_step_listen_confirm_apply(None)
+
+    mock_upd.assert_called_once()
+    persisted_data = _extract_persisted_data(mock_upd)
+
+    assert persisted_data.get(CONF_REMOTE_ID) == "AABBCC", (
+        f"Expected new remote AABBCC, got {persisted_data.get(CONF_REMOTE_ID)!r}"
+    )
+    mock_reload.assert_called_once_with(mock_hub_entry.entry_id)
+    assert result["type"] == "abort"
+    assert result["reason"] == "reconfigure_successful"
+
+
+@pytest.mark.asyncio
+async def test_change_repress_own_remote_allowed(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """Re-press of the current remote during change (Case C) is allowed.
+
+    Policy Case C: the captured id is in _remote_to_motor but points to THIS
+    motor (device_id == "ABCDEF") — the flow must NOT reject it, and must store
+    _first_capture_id and advance toward listen_second.
+    Pins: D-10 (Case C allowed), D-07 (Cases A/B rejected, C allowed).
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    # Subentry's motor is "ABCDEF"; currently bound to "AABBCC"
+    subentry = _make_with_remote_subentry("AABBCC")
+
+    mock_hub_entry.runtime_data.learn_remote_raw_and_wait = AsyncMock(  # type: ignore[union-attr]
+        return_value="AABBCC"
+    )
+    mock_hub_entry.runtime_data._registered_devices = {}  # type: ignore[union-attr]
+    # "AABBCC" is in _remote_to_motor but points to THIS motor (Case C)
+    mock_hub_entry.runtime_data._remote_to_motor = {  # type: ignore[union-attr]
+        "AABBCC": "ABCDEF"
+    }
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+        result = await handler.async_step_listen_first(None)
+        if result["type"] == FlowResultType.SHOW_PROGRESS:
+            await asyncio.sleep(0)
+            result = await handler.async_step_listen_first(None)
+
+    # Must NOT be rejected — _listen_error_key must not be set for a policy error
+    assert handler._first_capture_id == "AABBCC", (
+        "Case C (re-press of own remote) must NOT be rejected"
+    )
+    # Result must advance (SHOW_PROGRESS_DONE toward listen_second)
+    assert result["type"] == FlowResultType.SHOW_PROGRESS_DONE
+    assert handler._listen_error_key is None
+
+
+# ---------------------------------------------------------------------------
+# Remove confirm as two-option menu (REVIEW finding 1, D-09/RMT-03)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_remove_confirm_is_two_option_menu(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """async_step_remove_confirm returns a menu with remove_confirm_apply + reconfigure_menu.
+
+    Pins: REVIEW finding 1 (remove confirm must be async_show_menu, not a form),
+          D-09 (Remove vs Cancel gates the delete).
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_with_remote_subentry()
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ):
+        result = await handler.async_step_remove_confirm(None)
+
+    assert result["type"] == "menu"
+    assert "remove_confirm_apply" in result["menu_options"]
+    assert "reconfigure_menu" in result["menu_options"]
+
+
+@pytest.mark.asyncio
+async def test_remove_confirm_apply_deletes_key(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """remove_confirm_apply deletes CONF_REMOTE_ID from subentry data.
+
+    Verifies the safe 3-call persist pattern and that CONF_REMOTE_ID is absent
+    from the data dict passed to async_update_subentry.
+    Pins: RMT-03 (remove binding), D-09 (gate: explicit confirm before delete).
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_with_remote_subentry("112233")
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(
+        handler, "_get_entry", return_value=mock_hub_entry
+    ), patch.object(
+        handler.hass.config_entries, "async_update_subentry"
+    ) as mock_upd, patch.object(
+        handler.hass.config_entries, "async_schedule_reload"
+    ) as mock_reload:
+        result = await handler.async_step_remove_confirm_apply(None)
+
+    mock_upd.assert_called_once()
+    persisted_data = _extract_persisted_data(mock_upd)
+
+    assert CONF_REMOTE_ID not in persisted_data, (
+        f"CONF_REMOTE_ID must NOT be in persisted data: {persisted_data}"
+    )
+    mock_reload.assert_called_once_with(mock_hub_entry.entry_id)
+    assert result["type"] == "abort"
+    assert result["reason"] == "reconfigure_successful"
