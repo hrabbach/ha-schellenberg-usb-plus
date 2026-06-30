@@ -45,7 +45,8 @@
           "title": "Ajouter un volet",
           "menu_options": {
             "pair": "Appairer automatiquement",
-            "manual_add": "Ajouter manuellement (déjà appairé)"
+            "manual_add": "Ajouter manuellement (déjà appairé)",
+            "delegate": "Appairer un moteur déjà appairé avec une télécommande"
           }
         },
         "manual_add": {
@@ -60,6 +61,30 @@
         "manual_position": {
           "title": "Définir la position initiale",
           "description": "Où se trouve {device_name} en ce moment ? Cela définit la position de départ pour le curseur de position. Remarque : le positionnement pour les moteurs temporisés utilise un temps de déplacement par défaut et n'est pas calibré avant l'étalonnage.",
+          "data": {
+            "initial_position": "Position actuelle"
+          }
+        },
+        "delegate": {
+          "title": "Mettre le moteur en mode apprentissage",
+          "description": "Pour appairer un moteur qui répond déjà à une télécommande, vous devez d'abord le mettre en mode apprentissage :\n\n1. Appuyez sur le bouton **P** (programmation) au dos de votre télécommande.\n2. Appuyez sur **Stop** sur la télécommande — le moteur fera un bref mouvement pour confirmer qu'il est en mode apprentissage.\n3. Dès que vous voyez le moteur bouger, appuyez sur Suivant dans les 30 secondes.",
+          "submit": "Suivant"
+        },
+        "delegate_transmit": {
+          "title": "Envoyer la commande d'appairage",
+          "description": "Le moteur est en mode apprentissage. Cliquez sur Transmettre pour envoyer le signal d'appairage depuis Home Assistant. Le moteur fera un autre mouvement pour confirmer la nouvelle commande.",
+          "submit": "Transmettre"
+        },
+        "delegate_name": {
+          "title": "Nommer votre moteur",
+          "description": "Donnez un nom à ce moteur pour l'identifier facilement dans Home Assistant.",
+          "data": {
+            "device_name": "Nom de l'appareil"
+          }
+        },
+        "delegate_position": {
+          "title": "Définir la position initiale",
+          "description": "Commande d'appairage envoyée. Un moteur silencieux ne peut pas confirmer si cela a fonctionné — après avoir enregistré, testez en appuyant sur Ouvrir dans Home Assistant. Si {device_name} ne bouge pas, recommencez l'appairage.\n\nOù se trouve {device_name} en ce moment ?",
           "data": {
             "initial_position": "Position actuelle"
           }
@@ -123,6 +148,7 @@
       "error": {
         "pairing_timeout": "Aucun appareil n'a répondu dans les 2 minutes. Veuillez réessayer et vous assurer d'appuyer sur le bouton d'appairage de votre moteur de volet.",
         "pairing_failed": "Échec de l'appairage.",
+        "delegation_failed": "La commande d'appairage a échoué — le stick était occupé ou déconnecté. Assurez-vous que le moteur est en mode apprentissage, puis réessayez.",
         "device_limit_reached": "Limite d'appareils atteinte. Ce stick peut gérer environ 240 moteurs et tous les emplacements sont occupés. Supprimez un moteur inutilisé avant d'en ajouter un nouveau.",
         "calibration_timeout": "Délai de calibration dépassé. Le volet a mis plus de 5 minutes pour terminer le mouvement. Veuillez vérifier l'appareil et réessayer.",
         "calibration_start_timeout": "Délai d'attente dépassé pour le début du mouvement du volet. Veuillez vous assurer que l'appareil est correctement connecté et réessayer.",

@@ -45,7 +45,8 @@
           "title": "Rollladen hinzufügen",
           "menu_options": {
             "pair": "Automatisch koppeln",
-            "manual_add": "Manuell hinzufügen (bereits gekoppelt)"
+            "manual_add": "Manuell hinzufügen (bereits gekoppelt)",
+            "delegate": "Motor koppeln, der bereits mit einer Fernbedienung gekoppelt ist"
           }
         },
         "manual_add": {
@@ -60,6 +61,30 @@
         "manual_position": {
           "title": "Startposition festlegen",
           "description": "Wo befindet sich {device_name} gerade? Dies legt die Startposition für den Positionsregler fest. Hinweis: Die Positionierung für zeitgesteuerte Motoren verwendet eine Standard-Fahrzeit und ist erst nach der Kalibrierung genau.",
+          "data": {
+            "initial_position": "Aktuelle Position"
+          }
+        },
+        "delegate": {
+          "title": "Motor in den Lernmodus versetzen",
+          "description": "Um einen Motor zu koppeln, der bereits auf eine Fernbedienung reagiert, müssen Sie ihn zunächst in den Lernmodus versetzen:\n\n1. Drücken Sie die **P**-Taste (Programm) auf der Rückseite Ihrer Fernbedienung.\n2. Drücken Sie **Stop** auf der Fernbedienung — der Motor macht kurz eine Rüttelbewegung als Bestätigung, dass er im Lernmodus ist.\n3. Sobald Sie die Rüttelbewegung sehen, drücken Sie innerhalb von 30 Sekunden auf Weiter.",
+          "submit": "Weiter"
+        },
+        "delegate_transmit": {
+          "title": "Kopplungsbefehl senden",
+          "description": "Der Motor ist im Lernmodus. Klicken Sie auf Senden, um den Kopplungshandshake von Home Assistant zu übertragen. Der Motor macht noch einmal eine Rüttelbewegung, um den neuen Befehl zu bestätigen.",
+          "submit": "Senden"
+        },
+        "delegate_name": {
+          "title": "Motor benennen",
+          "description": "Geben Sie diesem Motor einen Namen, damit Sie ihn in Home Assistant leicht erkennen können.",
+          "data": {
+            "device_name": "Gerätename"
+          }
+        },
+        "delegate_position": {
+          "title": "Startposition festlegen",
+          "description": "Kopplungsbefehl gesendet. Ein stiller Motor kann nicht bestätigen, ob es geklappt hat — prüfen Sie nach dem Speichern, ob {device_name} sich öffnet, wenn Sie in Home Assistant auf Öffnen drücken. Falls nicht, wiederholen Sie die Kopplung.\n\nWo befindet sich {device_name} gerade?",
           "data": {
             "initial_position": "Aktuelle Position"
           }
@@ -123,6 +148,7 @@
       "error": {
         "pairing_timeout": "Kein Gerät hat innerhalb von 2 Minuten geantwortet. Bitte versuchen Sie es erneut und stellen Sie sicher, dass Sie die Kopplungstaste an Ihrem Rollladenmotor drücken.",
         "pairing_failed": "Kopplung fehlgeschlagen.",
+        "delegation_failed": "Kopplungsbefehl fehlgeschlagen — der Stick war beschäftigt oder getrennt. Stellen Sie sicher, dass der Motor im Lernmodus ist, und versuchen Sie es erneut.",
         "device_limit_reached": "Gerätelimit erreicht. Dieser Stick kann ca. 240 Motoren ansteuern und alle Slots sind belegt. Entfernen Sie einen nicht mehr genutzten Motor, bevor Sie einen neuen hinzufügen.",
         "calibration_timeout": "Kalibrierung abgelaufen. Der Rollladen hat mehr als 5 Minuten für die Bewegung benötigt. Bitte überprüfen Sie das Gerät und versuchen Sie es erneut.",
         "calibration_start_timeout": "Zeitüberschreitung beim Warten auf die Bewegung des Rollladens. Bitte stellen Sie sicher, dass das Gerät ordnungsgemäß angeschlossen ist, und versuchen Sie es erneut.",
