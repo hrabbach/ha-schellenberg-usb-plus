@@ -348,12 +348,13 @@ async def test_unregister_remote_ref_count_full(hass: HomeAssistant) -> None:
 
 
 @pytest.mark.asyncio
-async def test_bidir_remote_event_fires(hass: HomeAssistant) -> None:
-    """A registered remote fires SIGNAL_REMOTE_EVENT AND preserves the SIGNAL_DEVICE_EVENT bridge.
+async def test_api_triple_dispatch_when_remote_registered(hass: HomeAssistant) -> None:
+    """api.py GATE 3 triple-dispatches for any remote registered via register_remote.
 
-    D-05: event.py calls register_remote for ANY bound motor (including
-    bidirectional); GATE 3 emits SIGNAL_REMOTE_EVENT for the motor. The
-    SIGNAL_DEVICE_EVENT bridge must still emit byte-for-byte unchanged (RMT-07).
+    The bidirectional-exclusion guard lives in event.py (GUARD 2), not in api.py.
+    api.py is policy-free: it routes whatever register_remote declares.
+    This test verifies the API-layer dispatch, NOT event.py creation behavior.
+    SIGNAL_DEVICE_EVENT bridge remains byte-for-byte unchanged (RMT-07).
     A single fresh frame produces exactly 3 dispatches: the triple dispatch.
     """
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
