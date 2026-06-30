@@ -38,7 +38,7 @@
       "entry_type": "Blind",
       "initiate_flow": {
         "user": "Add device",
-        "reconfigure": "Calibrate"
+        "reconfigure": "Configure"
       },
       "step": {
         "menu": {
@@ -143,6 +143,43 @@
             "redo": "Redo measurement (return shutter to fully open first)"
           },
           "submit": "Done"
+        },
+        "reconfigure_menu": {
+          "title": "Configure {device_name}",
+          "menu_options": {
+            "calibrate": "Calibrate travel time",
+            "bind_remote": "Bind a remote",
+            "change_remote": "Change remote",
+            "remove_remote": "Remove remote"
+          }
+        },
+        "listen_first": {
+          "title": "Listening for remote press",
+          "description": "Press any button on the remote you want to bind to {device_name}. Waiting for the first press…"
+        },
+        "listen_second": {
+          "title": "Confirm remote press",
+          "description": "Press the same button again to confirm."
+        },
+        "listen_timeout": {
+          "title": "No remote detected",
+          "description": "No button press was received. Check that the remote is within range and try again."
+        },
+        "listen_confirm": {
+          "title": "Bind remote to {device_name}?",
+          "description": "Remote **{remote_id}** was detected twice. Bind it to {device_name}?",
+          "menu_options": {
+            "listen_confirm_apply": "Bind",
+            "listen_first": "Try again"
+          }
+        },
+        "remove_confirm": {
+          "title": "Remove remote from {device_name}?",
+          "description": "This will remove the remote binding from {device_name}. The remote event entity will disappear and position tracking triggered by that remote will stop.",
+          "menu_options": {
+            "remove_confirm_apply": "Remove",
+            "reconfigure_menu": "Cancel"
+          }
         }
       },
       "error": {
@@ -156,14 +193,20 @@
         "invalid_enum_format": "Transmit address must be exactly 2 hexadecimal characters (e.g. 10, 1A, 2B).",
         "duplicate_enum": "A blind with this transmit address is already added to the integration.",
         "timed_cal_too_short": "Run was too short (less than 2 seconds) — likely a double-press or misfire. Please return the shutter to the fully open position via your remote, then try again.",
-        "timed_cal_too_long": "Run exceeded 120 seconds — the shutter may have been left running. Please return the shutter to the fully open position via your remote, then try again within 2 minutes."
+        "timed_cal_too_long": "Run exceeded 120 seconds — the shutter may have been left running. Please return the shutter to the fully open position via your remote, then try again within 2 minutes.",
+        "remote_is_motor": "That button is registered to a motor, not a remote — choose a different button.",
+        "remote_already_bound": "That remote is already bound to {other_motor_name} — unbind it there first.",
+        "remote_press_mismatch": "The two presses did not match — please try again.",
+        "remote_capture_timeout": "No remote detected — press a button within the listening window.",
+        "remote_capture_disconnected": "The USB stick disconnected — reconnect and try again.",
+        "hub_not_loaded": "The USB hub is not loaded. Please check the hub setup and try again."
       },
       "abort": {
         "pairing_timeout": "No device responded within 2 minutes. Please try again.",
         "pairing_failed": "Pairing failed.",
         "device_not_found": "The selected device could not be found. Please try again.",
         "timed_cal_incomplete": "Calibration is incomplete — the open and close times were not both measured. Please start the calibration again.",
-        "reconfigure_successful": "Calibration completed successfully"
+        "reconfigure_successful": "Configuration saved successfully"
       }
     }
   },
@@ -188,6 +231,22 @@
     }
   },
   "entity": {
+    "event": {
+      "remote_button": {
+        "name": "Remote button",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "up": "Up",
+              "down": "Down",
+              "stop": "Stop",
+              "hold_up": "Hold up",
+              "hold_down": "Hold down"
+            }
+          }
+        }
+      }
+    },
     "sensor": {
       "connection_status": {
         "name": "Connection status"

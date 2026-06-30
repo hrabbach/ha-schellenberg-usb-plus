@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections.abc import Awaitable
@@ -25,8 +26,10 @@ from .const import (
     CONF_DEVICE_ID,
     CONF_INITIAL_POSITION,
     CONF_OPEN_TIME,
+    CONF_REMOTE_ID,
     CONF_SERIAL_PORT,
     DOMAIN,
+    LEARN_REMOTE_CAPTURE_TIMEOUT,
     SUBENTRY_TYPE_BLIND,
 )
 from .api import DeviceLimitReached
@@ -222,6 +225,17 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         self._pending_device_enum: str | None = None
         self._pending_device_name: str | None = None
         self._pending_is_bidirectional: bool = False
+        # Phase 15: capture state for learn-by-press remote binding (D-03..D-10)
+        self._first_capture_id: str | None = None
+        self._is_change_mode: bool = False
+        self._listen_first_task: asyncio.Task[Any] | None = None
+        self._listen_second_task: asyncio.Task[Any] | None = None
+        # Error-carry vars so listen_timeout renders the correct one of four
+        # error keys (remote_capture_timeout / remote_capture_disconnected /
+        # remote_is_motor / remote_already_bound / remote_press_mismatch)
+        # that was set by the preceding listen_first/listen_second/policy step.
+        self._listen_error_key: str | None = None
+        self._listen_error_placeholders: dict[str, str] | None = None
 
     def _get_calibration_handler(self) -> CalibrationFlowHandler:
         """Return (and lazily create) the calibration flow handler."""
@@ -677,8 +691,73 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
+        """Entry point: show adaptive menu based on current remote binding state.
+
+        Shows ["calibrate", "bind_remote"] when no remote is bound, or
+        ["calibrate", "change_remote", "remove_remote"] when a remote_id exists
+        in the subentry data (D-01/D-02).
+
+        async_show_menu(step_id="reconfigure_menu") REQUIRES a matching
+        async_step_reconfigure_menu to exist — HA raises UnknownStep otherwise.
+        """
+        subentry = self._get_reconfigure_subentry()
+        if not subentry.data.get("device_id"):
+            return self.async_abort(reason="device_not_found")
+        has_remote = bool(subentry.data.get(CONF_REMOTE_ID))
+        if has_remote:
+            menu_options = ["calibrate", "change_remote", "remove_remote"]
+        else:
+            menu_options = ["calibrate", "bind_remote"]
+        return self.async_show_menu(
+            step_id="reconfigure_menu",
+            menu_options=menu_options,
+        )
+
+    def _reset_capture_round(self) -> None:
+        """Tear down any in-flight capture tasks and clear the per-round id.
+
+        Called on every FRESH entry into the capture flow — the reconfigure
+        menu and a fresh listen_first (bind / change / retry edges) — so a
+        leftover listen task or a stale _first_capture_id from an abandoned
+        prior round can never bleed into the next round (WR-03 / WR-04). Does
+        NOT touch _is_change_mode or the error carry vars; callers own those.
+        """
+        if self._listen_first_task is not None:
+            if not self._listen_first_task.done():
+                self._listen_first_task.cancel()
+            self._listen_first_task = None
+        if self._listen_second_task is not None:
+            if not self._listen_second_task.done():
+                self._listen_second_task.cancel()
+            self._listen_second_task = None
+        self._first_capture_id = None
+
+    async def async_step_reconfigure_menu(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Re-entry point for the reconfigure menu; resets all capture state.
+
+        Cancels any pending capture tasks and clears carry vars so an abandoned
+        listen cannot leak a progress task or raw future when the user backs out
+        to the menu (REVIEW finding 2 + finding 4 state hygiene, mirrors the
+        async_step_menu hygiene at config_flow.py:272–275).
+        """
+        # Cancel-and-clear capture tasks + the per-round id (REVIEW finding 2,
+        # WR-04) via the shared helper, then reset the remaining menu-scoped
+        # state vars (REVIEW finding 4).
+        self._reset_capture_round()
+        self._is_change_mode = False
+        self._listen_error_key = None
+        self._listen_error_placeholders = None
+        return await self.async_step_reconfigure(user_input)
+
+    async def async_step_calibrate(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
         """Configure a blind: run calibration for the single device under this subentry.
 
+        This is the OLD async_step_reconfigure body, moved verbatim so existing
+        calibration routing (timed vs bidirectional) is unchanged (CTRL-05).
         We bypass storage lookup and set the calibration handler's selected device
         directly from the subentry data to avoid device_not_found errors before
         calibration has ever run.
@@ -707,7 +786,8 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         if not is_bidirectional:
             # CAL-01 / D-01: route timed motor to the event-free timed flow.
             _LOGGER.debug(
-                "Reconfigure: routing timed motor %s to TimedCalibrationFlowHandler",
+                "Calibrate: routing timed motor %s to"
+                " TimedCalibrationFlowHandler",
                 device_id,
             )
             handler_tc = self._get_timed_cal_handler()
@@ -812,3 +892,379 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         return await self._await_subentry_result(
             handler.async_step_timed_cal_confirm(user_input)
         )
+
+    # -------------------------------------------------------------------------
+    # Phase 15: Learn-by-press remote binding (D-03..D-10, RMT-01/02/03)
+    # -------------------------------------------------------------------------
+
+    async def async_step_bind_remote(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Entry for the bind path: set change-mode=False and start capture.
+
+        Clears first-capture state so a previous aborted attempt does not
+        carry over into a fresh bind (D-03).
+        """
+        self._is_change_mode = False
+        self._first_capture_id = None
+        return await self.async_step_listen_first(None)
+
+    async def async_step_change_remote(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Entry for the change path: set change-mode=True and start capture.
+
+        Sets _is_change_mode so async_step_listen_confirm includes the
+        current_remote_id placeholder (REVIEW finding 6 — no separate
+        change_confirm step; the single listen_confirm step is reused).
+        """
+        self._is_change_mode = True
+        self._first_capture_id = None
+        return await self.async_step_listen_first(None)
+
+    async def async_step_listen_first(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """First press: spawn raw-capture task, show progress spinner (D-03).
+
+        Hub-not-loaded guard mirrors async_step_delegate_transmit (WR-02).
+        Pitfall F: clear a stale completed task before creating a new one so
+        repeated menu navigations don't accumulate tasks.
+        Binding policy (D-07) runs on the first captured id BEFORE opening
+        the second listening window (RESEARCH Finding 2 Cases A/B/C/D).
+        """
+        # Clear stale task on re-entry (Pitfall F)
+        if (
+            self._listen_first_task is not None
+            and self._listen_first_task.done()
+        ):
+            self._listen_first_task = None
+
+        if self._listen_first_task is None:
+            # Fresh entry (bind / change / a confirm- or timeout-"Try again"
+            # edge that bypasses reconfigure_menu): tear down any leftover
+            # second-capture task and clear a stale _first_capture_id so the
+            # new round starts clean (WR-03 / WR-04). Not reached on the
+            # progress-poll re-entry, where the task is still pending.
+            self._reset_capture_round()
+            hub_entry = self._get_entry()
+            api = hub_entry.runtime_data
+            if api is None:
+                _LOGGER.warning(
+                    "Remote bind attempted while hub entry not loaded"
+                )
+                return self.async_show_form(
+                    step_id="listen_timeout",
+                    data_schema=vol.Schema({}),
+                    errors={"base": "hub_not_loaded"},
+                )
+            self._listen_first_task = self.hass.async_create_task(
+                api.learn_remote_raw_and_wait(
+                    LEARN_REMOTE_CAPTURE_TIMEOUT
+                ),
+                "listen_first_task",
+            )
+
+        if not self._listen_first_task.done():
+            return self.async_show_progress(
+                step_id="listen_first",
+                progress_action="listen_first",
+                progress_task=self._listen_first_task,
+            )
+
+        captured_id: str | None = self._listen_first_task.result()
+        self._listen_first_task = None
+
+        if captured_id is None:
+            # Timeout or disconnect — determine which for distinct copy (D-05).
+            hub_entry = self._get_entry()
+            api = hub_entry.runtime_data
+            disconnected = api is not None and not api.is_connected
+            self._listen_error_key = (
+                "remote_capture_disconnected"
+                if disconnected
+                else "remote_capture_timeout"
+            )
+            self._listen_error_placeholders = None
+            return self.async_show_progress_done(
+                next_step_id="listen_timeout"
+            )
+
+        # Binding policy checks on the FIRST captured id (D-07).
+        hub_entry = self._get_entry()
+        api = hub_entry.runtime_data
+        if api is None:
+            _LOGGER.warning(
+                "Remote bind attempted while hub entry not loaded"
+            )
+            return self.async_show_form(
+                step_id="listen_timeout",
+                data_schema=vol.Schema({}),
+                errors={"base": "hub_not_loaded"},
+            )
+
+        # Case A: captured id is an enrolled motor (not a remote).
+        if api.is_registered_motor(captured_id):
+            _LOGGER.warning(
+                "Remote bind rejected: captured id %s is a registered motor",
+                captured_id,
+            )
+            self._listen_error_key = "remote_is_motor"
+            self._listen_error_placeholders = None
+            return self.async_show_progress_done(
+                next_step_id="listen_timeout"
+            )
+
+        # Case B: captured id is already bound to a different motor.
+        other_motor_id = api.bound_motor_for(captured_id)
+        if other_motor_id is not None:
+            subentry = self._get_reconfigure_subentry()
+            this_motor_id = subentry.data.get("device_id")
+            if other_motor_id != this_motor_id:
+                # Find the other motor's display name for the placeholder.
+                entry = self._get_entry()
+                other_name: str = other_motor_id  # fallback to raw id
+                for sub in entry.subentries.values():
+                    if sub.data.get("device_id") == other_motor_id:
+                        other_name = sub.title or other_motor_id
+                        break
+                _LOGGER.warning(
+                    "Remote bind rejected: captured id %s is already"
+                    " bound to motor %s",
+                    captured_id,
+                    other_motor_id,
+                )
+                self._listen_error_key = "remote_already_bound"
+                self._listen_error_placeholders = {
+                    "other_motor_name": other_name
+                }
+                return self.async_show_progress_done(
+                    next_step_id="listen_timeout"
+                )
+            # Case C: re-press of THIS motor's current remote during change
+            # (D-10) — allow through; double-press verify will still confirm.
+
+        # Case D (clean unknown) or Case C (re-press own remote): proceed.
+        _LOGGER.info(
+            "Remote bind: first press captured id=%s, awaiting second press",
+            captured_id,
+        )
+        self._first_capture_id = captured_id
+        return self.async_show_progress_done(next_step_id="listen_second")
+
+    async def async_step_listen_second(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Second press: spawn new capture task, verify it matches the first (D-06).
+
+        The second listening window uses a FRESH future (a new asyncio.Task
+        wrapping a new learn_remote_raw_and_wait() call). Phase 11's
+        incrementor-dedup collapses a single physical press's repeated RF
+        frames into one logical event, so by the time this step is entered the
+        first press's future is already resolved and consumed. The new future
+        instance cannot be resolved by any leftover frames of the first press
+        because learn_remote_raw_and_wait() sets a NEW _learn_remote_raw_future
+        on entry — a different object than the one the first task used. No extra
+        sleep/timer guard is needed; the dedup + fresh-future boundary is the
+        chosen mitigation (REVIEW finding 8).
+        """
+        # Clear stale task on re-entry (Pitfall F).
+        if (
+            self._listen_second_task is not None
+            and self._listen_second_task.done()
+        ):
+            self._listen_second_task = None
+
+        if self._listen_second_task is None:
+            hub_entry = self._get_entry()
+            api = hub_entry.runtime_data
+            if api is None:
+                _LOGGER.warning(
+                    "Remote bind (second press) attempted while hub"
+                    " entry not loaded"
+                )
+                return self.async_show_form(
+                    step_id="listen_timeout",
+                    data_schema=vol.Schema({}),
+                    errors={"base": "hub_not_loaded"},
+                )
+            self._listen_second_task = self.hass.async_create_task(
+                api.learn_remote_raw_and_wait(
+                    LEARN_REMOTE_CAPTURE_TIMEOUT
+                ),
+                "listen_second_task",
+            )
+
+        if not self._listen_second_task.done():
+            return self.async_show_progress(
+                step_id="listen_second",
+                progress_action="listen_second",
+                progress_task=self._listen_second_task,
+            )
+
+        captured_id: str | None = self._listen_second_task.result()
+        self._listen_second_task = None
+
+        if captured_id is None:
+            # Timeout or disconnect on the second press.
+            hub_entry = self._get_entry()
+            api = hub_entry.runtime_data
+            disconnected = api is not None and not api.is_connected
+            self._listen_error_key = (
+                "remote_capture_disconnected"
+                if disconnected
+                else "remote_capture_timeout"
+            )
+            self._listen_error_placeholders = None
+            return self.async_show_progress_done(
+                next_step_id="listen_timeout"
+            )
+
+        if captured_id != self._first_capture_id:
+            # Mismatch: different remote pressed (D-06).
+            _LOGGER.warning(
+                "Remote bind double-press mismatch: first=%s second=%s",
+                self._first_capture_id,
+                captured_id,
+            )
+            self._listen_error_key = "remote_press_mismatch"
+            self._listen_error_placeholders = None
+            self._first_capture_id = None
+            return self.async_show_progress_done(
+                next_step_id="listen_timeout"
+            )
+
+        # Match — advance to confirm (shared step for bind AND change, D-10).
+        _LOGGER.info(
+            "Remote bind: second press matched id=%s, advancing to confirm",
+            captured_id,
+        )
+        return self.async_show_progress_done(next_step_id="listen_confirm")
+
+    async def async_step_listen_timeout(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Retry-in-place form for timeout / disconnect / policy rejection.
+
+        On the user_input-is-None path (HA routing from async_show_progress_done),
+        reads the _listen_error_key carry var set by listen_first/listen_second/
+        policy and renders the correct one of the four error keys (REVIEW finding 4).
+        On submit (user clicked "Try again") clears the carry vars and re-enters
+        listen_first. No binding is written here (D-05).
+        """
+        if user_input is None:
+            return self.async_show_form(
+                step_id="listen_timeout",
+                data_schema=vol.Schema({}),
+                errors={
+                    "base": self._listen_error_key or "remote_capture_timeout"
+                },
+                description_placeholders=self._listen_error_placeholders,
+            )
+        # User submitted "Try again" — clear carry vars and restart.
+        self._listen_error_key = None
+        self._listen_error_placeholders = None
+        self._first_capture_id = None
+        return await self.async_step_listen_first(None)
+
+    async def async_step_listen_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Confirm-before-persist: two-option menu (Confirm vs Retry) (D-08).
+
+        Reused for both the bind path (_is_change_mode=False) and the change
+        path (_is_change_mode=True — REVIEW finding 6: NO separate change_confirm
+        step). When change mode is active, the current_remote_id placeholder is
+        supplied so the translation layer can note the replacement.
+
+        async_show_menu with menu_options ["listen_confirm_apply", "listen_first"]
+        routes: Confirm -> async_step_listen_confirm_apply (persist),
+                Retry   -> async_step_listen_first (re-enter capture).
+        """
+        subentry = self._get_reconfigure_subentry()
+        ph: dict[str, str] = {
+            "motor_name": subentry.title or "",
+            "remote_id": self._first_capture_id or "",
+        }
+        if self._is_change_mode:
+            ph["current_remote_id"] = (
+                subentry.data.get(CONF_REMOTE_ID) or ""
+            )
+        return self.async_show_menu(
+            step_id="listen_confirm",
+            menu_options=["listen_confirm_apply", "listen_first"],
+            description_placeholders=ph,
+        )
+
+    async def async_step_listen_confirm_apply(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Persist remote_id on Confirm (D-08/RMT-02).
+
+        Uses the safe 3-call pattern: async_update_subentry + async_schedule_reload
+        + async_abort. MUST NOT call async_update_reload_and_abort — it raises
+        ValueError because _on_entry_updated is registered (__init__.py:157).
+        """
+        entry = self._get_entry()
+        subentry = self._get_reconfigure_subentry()
+        new_data = dict(subentry.data) | {
+            CONF_REMOTE_ID: self._first_capture_id
+        }
+        _LOGGER.info(
+            "Remote bind: persisting remote_id=%s for motor %s",
+            self._first_capture_id,
+            subentry.data.get("device_id"),
+        )
+        self.hass.config_entries.async_update_subentry(
+            entry, subentry, data=new_data
+        )
+        self.hass.config_entries.async_schedule_reload(entry.entry_id)
+        return self.async_abort(reason="reconfigure_successful")
+
+    async def async_step_remove_remote(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Entry for the remove path: delegate to the confirm menu (D-09)."""
+        return await self.async_step_remove_confirm(None)
+
+    async def async_step_remove_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Confirm-before-remove: two-option menu (Remove vs Cancel) (D-09).
+
+        async_show_menu with menu_options ["remove_confirm_apply", "reconfigure_menu"]
+        routes: Remove  -> async_step_remove_confirm_apply (delete key + reload),
+                Cancel  -> async_step_reconfigure_menu (adaptive menu, state reset).
+        """
+        subentry = self._get_reconfigure_subentry()
+        return self.async_show_menu(
+            step_id="remove_confirm",
+            menu_options=["remove_confirm_apply", "reconfigure_menu"],
+            description_placeholders={"motor_name": subentry.title or ""},
+        )
+
+    async def async_step_remove_confirm_apply(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Delete remote_id key on Remove (D-09/RMT-03).
+
+        Builds new_data as a dict WITHOUT the CONF_REMOTE_ID key (subentry.data
+        is a MappingProxyType — must convert with dict() / comprehension before
+        mutation). Uses the same 3-call persist pattern as listen_confirm_apply.
+        """
+        entry = self._get_entry()
+        subentry = self._get_reconfigure_subentry()
+        new_data = {
+            k: v
+            for k, v in subentry.data.items()
+            if k != CONF_REMOTE_ID
+        }
+        _LOGGER.info(
+            "Remote bind: removing remote_id from motor %s",
+            subentry.data.get("device_id"),
+        )
+        self.hass.config_entries.async_update_subentry(
+            entry, subentry, data=new_data
+        )
+        self.hass.config_entries.async_schedule_reload(entry.entry_id)
+        return self.async_abort(reason="reconfigure_successful")

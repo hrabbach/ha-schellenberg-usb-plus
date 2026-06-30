@@ -414,3 +414,122 @@ async def test_register_remote_rebind_drift_documented(
     assert api._remote_to_motor.get("REM001") is None
     assert api._registered_devices.get("REM001") is None
     assert api._remote_ref_counts.get("REM001") is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 15 — GATE 1.5: raw-capture future (RMT-01 + RMT-07 no-return guard)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_gate_1_5_resolves_raw_future_on_any_press(
+    hass: HomeAssistant,
+) -> None:
+    """GATE 1.5 resolves _learn_remote_raw_future on a registered motor's press.
+
+    Asserts BOTH:
+    (a) the raw capture resolves with the registered motor's device_id
+        (GATE 4's registered-id filter is bypassed by GATE 1.5), AND
+    (b) the motor frame still fires its final SIGNAL_DEVICE_EVENT_{motor_id}
+        dispatch (no-return contract — REVIEW finding 5). A stray `return`
+        inside GATE 1.5 would pass (a) but fail (b).
+    """
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    api.register_entity("MOT001", "10")  # registered motor
+
+    # Start a raw capture
+    capture_task = asyncio.create_task(
+        api.learn_remote_raw_and_wait(timeout=5.0)
+    )
+    await asyncio.sleep(0)  # let the future be created
+
+    with patch(
+        "custom_components.schellenberg_usb.api.async_dispatcher_send"
+    ) as mock_send:
+        api._handle_message("ss10MOT001ABCD01PP00")
+        await asyncio.sleep(0)
+
+    result = await capture_task
+
+    # (a) Raw capture resolved with the registered motor's id
+    assert result == "MOT001"
+
+    # (b) Motor frame still fired its final SIGNAL_DEVICE_EVENT_MOT001 dispatch
+    signals = [c[0][1] for c in mock_send.call_args_list]
+    assert f"{SIGNAL_DEVICE_EVENT}_MOT001" in signals
+
+
+@pytest.mark.asyncio
+async def test_gate_1_5_does_not_suppress_normal_routing(
+    hass: HomeAssistant,
+) -> None:
+    """GATE 1.5 does not suppress GATE 3 triple dispatch (RMT-07 regression guard).
+
+    A raw capture started, then a bound-remote frame fed in; the raw future
+    resolves AND the GATE 3 triple dispatch still fires (3 calls) — proving
+    GATE 1.5 did not return/suppress on the REMOTE path.
+    """
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    api.register_remote("REM001", "MOT001", "10")
+
+    # Start a raw future (Gate 1.5 will fire)
+    capture_task = asyncio.create_task(
+        api.learn_remote_raw_and_wait(timeout=5.0)
+    )
+    await asyncio.sleep(0)
+
+    with patch(
+        "custom_components.schellenberg_usb.api.async_dispatcher_send"
+    ) as mock_send:
+        api._handle_message("ss10REM001ABCD01PP00")
+        await asyncio.sleep(0)
+
+    result = await capture_task
+
+    # Raw capture resolved with the remote's id
+    assert result == "REM001"
+    # Triple dispatch must still have fired (Gate 3 was not suppressed by Gate 1.5)
+    assert mock_send.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_gate_1_5_burst_tail_does_not_resolve_second_capture(
+    hass: HomeAssistant,
+) -> None:
+    """CR-01: a single press's burst tail must NOT resolve a SECOND capture.
+
+    A single physical press emits a ~9-frame RF burst that all share ONE
+    incrementor. After the first capture resolves and the learn-by-press flow
+    opens the second capture window (D-06 double-press safeguard), the leftover
+    burst frames (same device_id + same incrementor) must be ignored — otherwise
+    one press falsely satisfies the second capture and binds after a single
+    press. A genuine second press carries a NEW incrementor and DOES resolve it.
+    """
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+
+    # First capture (listen_first): burst frame 1 (incr=ABCD) resolves it.
+    first_task = asyncio.create_task(
+        api.learn_remote_raw_and_wait(timeout=5.0)
+    )
+    await asyncio.sleep(0)
+    api._handle_message("ss10REM001ABCD01PP00")
+    assert await first_task == "REM001"
+
+    # Second capture (listen_second) opens immediately, as the flow does.
+    second_task = asyncio.create_task(
+        api.learn_remote_raw_and_wait(timeout=5.0)
+    )
+    await asyncio.sleep(0)
+
+    # Burst tail of the SAME press (same incr=ABCD) must NOT resolve it.
+    api._handle_message("ss10REM001ABCD01PP00")
+    api._handle_message("ss10REM001ABCD01PP00")
+    await asyncio.sleep(0)
+    assert not second_task.done(), (
+        "burst-tail frame of the first press falsely resolved the second "
+        "capture future — D-06 double-press defeated (CR-01)"
+    )
+
+    # A genuine second press (NEW incrementor) resolves the second capture.
+    api._handle_message("ss10REM001EFGH01PP00")
+    assert await second_task == "REM001"

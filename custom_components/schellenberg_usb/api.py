@@ -49,6 +49,7 @@ from .const import (
     HEARTBEAT_INTERVAL,
     HEARTBEAT_MISS_THRESHOLD,
     HEARTBEAT_TRAFFIC_WINDOW,
+    LEARN_REMOTE_CAPTURE_TIMEOUT,
     LEARN_REMOTE_TIMEOUT,
     MAX_DEVICE_ENUM,
     PAIRING_DEVICE_ENUM_START,
@@ -124,6 +125,19 @@ class SchellenbergUsbApi:
         # reverse-lookup: remote_device_id → motor_device_id
         self._remote_to_motor: dict[str, str] = {}
         self._learn_remote_future: asyncio.Future[str] | None = None
+        # Phase 15: raw-capture future — resolves on ANY device press regardless of
+        # registration status; used by learn_remote_raw_and_wait() (D-07).
+        self._learn_remote_raw_future: asyncio.Future[str] | None = None
+        # Phase 15 CR-01: burst-tail guard for raw learn-capture. A single
+        # physical press emits a ~9-frame RF burst that all share ONE
+        # incrementor. Without this guard, leftover frames of the first press
+        # would resolve the SECOND capture future and falsely satisfy the D-06
+        # double-press safeguard. Records the (device_id, incrementor) and
+        # loop.time() of the frame that last resolved a raw-capture future; a
+        # same-key frame within REMOTE_DEDUP_WINDOW is treated as burst tail and
+        # ignored. A genuine second press carries a NEW incrementor and passes.
+        self._learn_remote_raw_last_key: tuple[str, str] | None = None
+        self._learn_remote_raw_last_time: float = 0.0
         # Incrementor dedup cache: (device_id, incrementor) → loop.time() of last seen
         self._dedup_cache: dict[tuple[str, str], float] = {}
         # TimerHandles for dedup quiet-period resets (keyed by (device_id, incrementor))
@@ -432,6 +446,47 @@ class SchellenbergUsbApi:
                         )
                         # Don't send dispatcher signal — let the caller handle
                         return
+
+                # [GATE 1.5] — raw learn-window: resolve raw-capture future on ANY device
+                # press (Phase 15 D-07: captures enrolled motors + already-bound remotes
+                # for explicit binding-policy checks. Placed BEFORE dedup so it is never
+                # suppressed.)
+                # CRITICAL: no `return` here — all existing gates 2/3/4/final dispatch
+                # continue byte-for-byte unchanged (RMT-07).
+                # CR-01: a frame matching the (device_id, incrementor) that last
+                # resolved a raw capture, within REMOTE_DEDUP_WINDOW, is a burst-tail
+                # repeat of the SAME physical press — ignore it so it cannot resolve the
+                # second capture future and defeat the D-06 double-press safeguard. A
+                # real second press carries a new incrementor and is never suppressed.
+                if (
+                    self._learn_remote_raw_future
+                    and not self._learn_remote_raw_future.done()
+                ):
+                    raw_key = (device_id, incrementor)
+                    raw_now = self.hass.loop.time()
+                    if (
+                        self._learn_remote_raw_last_key == raw_key
+                        and (raw_now - self._learn_remote_raw_last_time)
+                        < REMOTE_DEDUP_WINDOW
+                    ):
+                        _LOGGER.debug(
+                            "learn_remote_raw: ignoring burst-tail frame %s"
+                            " incr=%s (same press, %.3fs ago)",
+                            device_id, incrementor,
+                            raw_now - self._learn_remote_raw_last_time,
+                        )
+                    else:
+                        _LOGGER.info(
+                            "learn_remote_raw: captured device %s (registered=%s)",
+                            device_id,
+                            device_id in self._registered_devices,
+                        )
+                        self._learn_remote_raw_last_key = raw_key
+                        self._learn_remote_raw_last_time = raw_now
+                        self._safe_resolve_future(
+                            self._learn_remote_raw_future, device_id
+                        )
+                    # Do NOT return — existing routing/dedup/dispatch continues unchanged.
 
                 # Compute-once: remote routing discriminator + dedup-scope flags
                 motor_id = self._remote_to_motor.get(device_id)
@@ -1081,6 +1136,62 @@ class SchellenbergUsbApi:
         finally:
             self._learn_remote_future = None
 
+    async def learn_remote_raw_and_wait(
+        self, timeout: float = LEARN_REMOTE_CAPTURE_TIMEOUT
+    ) -> str | None:
+        """Open a raw-capture listening window; return the first device_id seen, or None.
+
+        Unlike learn_remote_and_wait(), resolves on ANY device press — enrolled
+        motors and already-bound remotes included. All binding policy lives in
+        the caller (Phase 15 flow, D-07). Returns the raw 6-char hex device_id,
+        or None on timeout or disconnect.
+        """
+        if (
+            self._learn_remote_raw_future
+            and not self._learn_remote_raw_future.done()
+        ):
+            _LOGGER.warning("learn_remote_raw_and_wait already in progress")
+            return None
+
+        self._learn_remote_raw_future = (
+            asyncio.get_running_loop().create_future()
+        )
+        try:
+            return await asyncio.wait_for(
+                self._learn_remote_raw_future, timeout=timeout
+            )
+        except TimeoutError:
+            _LOGGER.debug(
+                "learn_remote_raw_and_wait: timeout after %.1fs", timeout
+            )
+            return None
+        except ConnectionError:
+            _LOGGER.warning(
+                "learn_remote_raw_and_wait aborted — serial port disconnected"
+            )
+            return None
+        finally:
+            self._learn_remote_raw_future = None
+
+    def is_registered_motor(self, device_id: str) -> bool:
+        """Return True if device_id is an enrolled motor (not a bound remote).
+
+        Public accessor for the config-flow binding policy so the flow does not
+        reach into the private registration dicts (WR-05).
+        """
+        return (
+            device_id in self._registered_devices
+            and device_id not in self._remote_to_motor
+        )
+
+    def bound_motor_for(self, remote_id: str) -> str | None:
+        """Return the motor a remote is bound to, or None if it is unbound.
+
+        Public accessor over `_remote_to_motor` for the config-flow binding
+        policy (WR-05).
+        """
+        return self._remote_to_motor.get(remote_id)
+
     async def verify_device(self, *, heartbeat_probe: bool = False) -> bool:
         """Verify this is a Schellenberg USB stick by sending !? command.
 
@@ -1172,6 +1283,9 @@ class SchellenbergUsbApi:
             self._safe_resolve_future(self._verify_future, exception=err)
             self._safe_resolve_future(self._device_id_future, exception=err)
             self._safe_resolve_future(self._learn_remote_future, exception=err)
+            self._safe_resolve_future(
+                self._learn_remote_raw_future, exception=err
+            )
             self._safe_resolve_future(self._delegation_future, exception=err)
             # Teardown dedup timers (idempotent — clearing an empty dict is a no-op)
             for handle in self._dedup_handles.values():

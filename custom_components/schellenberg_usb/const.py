@@ -166,6 +166,9 @@ REMOTE_DEDUP_WINDOW = 1.0
 
 # seconds — learn-window default timeout (not UI-exposed)
 LEARN_REMOTE_TIMEOUT = 30.0
+# seconds — capture window for each press in the Phase 15 learn-by-press flow
+# (each of the two double-press presses uses this timeout independently)
+LEARN_REMOTE_CAPTURE_TIMEOUT = 15.0
 
 # Remote button press → HA event type (Phase 13, D-01)
 # 01=up, 02=down, 00=stop, 41=hold_up, 42=hold_down

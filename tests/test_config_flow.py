@@ -343,7 +343,7 @@ async def test_reconfigure_timed_motor_enters_timed_flow(
                     "step_id": "timed_cal_precondition",
                 },
             ) as mock_timed_step:
-                result = await handler_timed.async_step_reconfigure(None)
+                result = await handler_timed.async_step_calibrate(None)
 
     # Timed reconfigure must NOT abort (REVIEW-4)
     assert result["type"] != "abort", (
@@ -385,7 +385,7 @@ async def test_reconfigure_timed_motor_enters_timed_flow(
             new_callable=AsyncMock,
             return_value={"type": "form", "step_id": "calibration_close"},
         ):
-            result_bi = await handler_bi.async_step_reconfigure(None)
+            result_bi = await handler_bi.async_step_calibrate(None)
 
     # Bidirectional reconfigure must not be an abort with timed reason (CTRL-05)
     assert result_bi.get("reason") != "timed_calibration_unavailable", (
