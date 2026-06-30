@@ -82,9 +82,7 @@ async def test_dedup_quiet_period_reset(hass: HomeAssistant) -> None:
 
         # Simulate that the quiet period has elapsed for this dedup key
         dedup_key = ("REM001", "ABCD")
-        api._dedup_cache[dedup_key] = (
-            hass.loop.time() - REMOTE_DEDUP_WINDOW - 0.001
-        )
+        api._dedup_cache[dedup_key] = hass.loop.time() - REMOTE_DEDUP_WINDOW - 0.001
 
         # Same frame again — quiet period expired, counts as a new press
         api._handle_message("ss10REM001ABCD01PP00")
@@ -393,7 +391,9 @@ async def test_register_remote_rebind_drift_documented(
 
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
 
-    with caplog.at_level(logging.WARNING, logger="custom_components.schellenberg_usb.api"):
+    with caplog.at_level(
+        logging.WARNING, logger="custom_components.schellenberg_usb.api"
+    ):
         # First registration: remote → motorA
         api.register_remote("REM001", "MOTA01", "10")
         # Re-bind to a DIFFERENT motor (triggers WR-03 warning on second call)

@@ -58,9 +58,7 @@ class SchellenbergRemoteEventEntity(EventEntity):
         # Register unconditionally — the bidirectional exclusion lives
         # entirely in event.py's creation guard (Option A), so this entity
         # only ever exists for a timed motor (D-03).
-        self._api.register_remote(
-            self._remote_id, self._device_id, self._device_enum
-        )
+        self._api.register_remote(self._remote_id, self._device_id, self._device_enum)
 
         # Snapshot both api and remote_id so the closure captures no
         # implicit self reference (self._api evaluated at call-time
@@ -81,9 +79,7 @@ class SchellenbergRemoteEventEntity(EventEntity):
         )
 
     @callback
-    def _on_remote_event(
-        self, command: str, _receive_timestamp: float
-    ) -> None:
+    def _on_remote_event(self, command: str, _receive_timestamp: float) -> None:
         """Handle a remote button press; fire the corresponding HA event."""
         event_type = REMOTE_EVENT_MAP.get(command)
         if event_type is None:
