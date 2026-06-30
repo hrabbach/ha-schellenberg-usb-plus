@@ -819,9 +819,21 @@ class SchellenbergUsbApi:
         # Create the dedicated future (lifecycle: created here, cleared in
         # finally, and drained by update_connection_status on disconnect).
         # It is NEVER awaited for an inbound frame (Pitfall 3 — silent motors
-        # send none); it exists purely for lifecycle/drain symmetry.
+        # send none); it exists purely for the in-progress concurrency guard
+        # above and for lifecycle/drain symmetry.
         self._delegation_future = (
             asyncio.get_running_loop().create_future()
+        )
+        # Because nothing awaits this future, a drain that calls
+        # set_exception (disconnect via update_connection_status, or
+        # abort_delegation_pair) would otherwise be garbage-collected with an
+        # unretrieved exception, which asyncio logs as a spurious
+        # "Future exception was never retrieved" warning + traceback in the HA
+        # log (WR-01). Retrieve the exception in a done-callback to silence it;
+        # recovery itself is driven by the is_connected polls + wait_for
+        # deadline, not by this future.
+        self._delegation_future.add_done_callback(
+            lambda f: f.cancelled() or f.exception()
         )
 
         try:
