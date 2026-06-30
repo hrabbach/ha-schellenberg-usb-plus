@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Timed motors with a bound physical remote now track position in Home Assistant when the remote is used: the position loop starts automatically on a remote open or close press (including jog presses) and latches the best-effort elapsed-time position on a remote stop press.
 - Each timed motor with a bound remote now exposes a Home Assistant event entity that fires when you press the physical remote's buttons (open, close, stop, and hold-up / hold-down), grouped under the motor's device. You can use remote button presses directly as automation triggers. Bidirectional motors and motors without a bound remote do not get an event entity.
+- You can now add an already-remote-paired motor entirely from the Home Assistant UI: a new "Pair a motor that's already paired with a remote" option under **+ Add device** walks you through putting the motor into learn mode (remote P-button, then Stop) and wirelessly enrolls it. The stick's LED blinks during the handshake, a free address is assigned automatically, and the cover entity appears immediately — no need to enter a device ID by hand. Because these motors can't confirm the pairing, the final screen reminds you to verify by pressing Open in Home Assistant; if the stick disconnects or is busy, you get a clear error and can retry without restarting.
 
 ## [1.1.0] - 2026-06-29
 
