@@ -38,7 +38,7 @@
       "entry_type": "Rollladen",
       "initiate_flow": {
         "user": "Gerät koppeln",
-        "reconfigure": "Kalibrieren"
+        "reconfigure": "Konfigurieren"
       },
       "step": {
         "menu": {
@@ -143,6 +143,43 @@
             "redo": "Messung wiederholen (Rollladen zuerst vollständig öffnen)"
           },
           "submit": "Fertig"
+        },
+        "reconfigure_menu": {
+          "title": "{device_name} konfigurieren",
+          "menu_options": {
+            "calibrate": "Fahrzeit kalibrieren",
+            "bind_remote": "Fernbedienung anlernen",
+            "change_remote": "Fernbedienung wechseln",
+            "remove_remote": "Fernbedienung entfernen"
+          }
+        },
+        "listen_first": {
+          "title": "Warte auf Fernbedienungstaste",
+          "description": "Drücken Sie eine beliebige Taste auf der Fernbedienung, die Sie mit {device_name} verknüpfen möchten. Warte auf den ersten Tastendruck…"
+        },
+        "listen_second": {
+          "title": "Tastendruck bestätigen",
+          "description": "Drücken Sie dieselbe Taste erneut zur Bestätigung."
+        },
+        "listen_timeout": {
+          "title": "Keine Fernbedienung erkannt",
+          "description": "Es wurde kein Tastendruck empfangen. Stellen Sie sicher, dass die Fernbedienung in Reichweite ist, und versuchen Sie es erneut."
+        },
+        "listen_confirm": {
+          "title": "Fernbedienung mit {device_name} verknüpfen?",
+          "description": "Fernbedienung **{remote_id}** wurde zweimal erkannt. Mit {device_name} verknüpfen?",
+          "menu_options": {
+            "listen_confirm_apply": "Verknüpfen",
+            "listen_first": "Erneut versuchen"
+          }
+        },
+        "remove_confirm": {
+          "title": "Fernbedienung von {device_name} entfernen?",
+          "description": "Dadurch wird die Fernbedienungsverknüpfung von {device_name} entfernt. Die Fernbedienungs-Ereignis-Entität verschwindet und die durch diese Fernbedienung ausgelöste Positionsverfolgung wird beendet.",
+          "menu_options": {
+            "remove_confirm_apply": "Entfernen",
+            "reconfigure_menu": "Abbrechen"
+          }
         }
       },
       "error": {
@@ -156,14 +193,20 @@
         "invalid_enum_format": "Die Sendeadresse muss genau 2 hexadezimale Zeichen haben (z. B. 10, 1A, 2B).",
         "duplicate_enum": "Ein Rollladen mit dieser Sendeadresse ist bereits zur Integration hinzugefügt.",
         "timed_cal_too_short": "Der Lauf war zu kurz (weniger als 2 Sekunden) -- wahrscheinlich eine Doppelbetätigung oder Fehlauslösung. Bitte führen Sie den Rollladen über Ihre Fernbedienung in die vollständig geöffnete Position und versuchen Sie es erneut.",
-        "timed_cal_too_long": "Der Lauf hat 120 Sekunden überschritten -- der Rollladen läuft möglicherweise noch. Bitte führen Sie den Rollladen über Ihre Fernbedienung in die vollständig geöffnete Position und versuchen Sie es innerhalb von 2 Minuten erneut."
+        "timed_cal_too_long": "Der Lauf hat 120 Sekunden überschritten -- der Rollladen läuft möglicherweise noch. Bitte führen Sie den Rollladen über Ihre Fernbedienung in die vollständig geöffnete Position und versuchen Sie es innerhalb von 2 Minuten erneut.",
+        "remote_is_motor": "Diese Taste ist einem Motor zugewiesen, nicht einer Fernbedienung — wählen Sie eine andere Taste.",
+        "remote_already_bound": "Diese Fernbedienung ist bereits mit {other_motor_name} verknüpft — entfernen Sie sie dort zuerst.",
+        "remote_press_mismatch": "Die zwei Tastendrücke stimmten nicht überein — bitte versuchen Sie es erneut.",
+        "remote_capture_timeout": "Keine Fernbedienung erkannt — drücken Sie eine Taste innerhalb des Empfangsfensters.",
+        "remote_capture_disconnected": "Der USB-Stick wurde getrennt — schließen Sie ihn wieder an und versuchen Sie es erneut.",
+        "hub_not_loaded": "Der USB-Hub ist nicht geladen. Bitte überprüfen Sie die Hub-Einrichtung und versuchen Sie es erneut."
       },
       "abort": {
         "pairing_timeout": "Kein Gerät hat innerhalb von 2 Minuten geantwortet. Bitte versuchen Sie es erneut.",
         "pairing_failed": "Kopplung fehlgeschlagen.",
         "device_not_found": "Das ausgewählte Gerät konnte nicht gefunden werden. Bitte versuchen Sie es erneut.",
         "timed_cal_incomplete": "Die Kalibrierung ist unvollständig -- die Öffnungs- und Schließzeiten wurden nicht beide gemessen. Bitte starten Sie die Kalibrierung neu.",
-        "reconfigure_successful": "Kalibrierung erfolgreich abgeschlossen"
+        "reconfigure_successful": "Konfiguration erfolgreich gespeichert"
       }
     }
   },

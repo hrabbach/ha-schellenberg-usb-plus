@@ -38,7 +38,7 @@
       "entry_type": "Persiana",
       "initiate_flow": {
         "user": "Emparejar dispositivo",
-        "reconfigure": "Calibrar"
+        "reconfigure": "Configurar"
       },
       "step": {
         "menu": {
@@ -143,6 +143,43 @@
             "redo": "Repetir medición (primero devuelva la persiana a la posición abierta)"
           },
           "submit": "Hecho"
+        },
+        "reconfigure_menu": {
+          "title": "Configurar {device_name}",
+          "menu_options": {
+            "calibrate": "Calibrar tiempo de recorrido",
+            "bind_remote": "Vincular mando",
+            "change_remote": "Cambiar mando",
+            "remove_remote": "Eliminar mando"
+          }
+        },
+        "listen_first": {
+          "title": "Escuchando pulsación del mando",
+          "description": "Pulse cualquier botón del mando que desea vincular a {device_name}. Esperando la primera pulsación…"
+        },
+        "listen_second": {
+          "title": "Confirmar pulsación del mando",
+          "description": "Pulse el mismo botón de nuevo para confirmar."
+        },
+        "listen_timeout": {
+          "title": "Mando no detectado",
+          "description": "No se recibió ninguna pulsación. Compruebe que el mando esté al alcance e inténtelo de nuevo."
+        },
+        "listen_confirm": {
+          "title": "¿Vincular mando a {device_name}?",
+          "description": "El mando **{remote_id}** fue detectado dos veces. ¿Vincularlo a {device_name}?",
+          "menu_options": {
+            "listen_confirm_apply": "Vincular",
+            "listen_first": "Intentar de nuevo"
+          }
+        },
+        "remove_confirm": {
+          "title": "¿Eliminar mando de {device_name}?",
+          "description": "Esto eliminará la vinculación del mando de {device_name}. La entidad de evento del mando desaparecerá y el seguimiento de posición activado por ese mando se detendrá.",
+          "menu_options": {
+            "remove_confirm_apply": "Eliminar",
+            "reconfigure_menu": "Cancelar"
+          }
         }
       },
       "error": {
@@ -156,14 +193,20 @@
         "invalid_enum_format": "La dirección de transmisión debe tener exactamente 2 caracteres hexadecimales (p. ej. 10, 1A, 2B).",
         "duplicate_enum": "Ya hay una persiana con esta dirección de transmisión añadida a la integración.",
         "timed_cal_too_short": "El recorrido fue demasiado corto (menos de 2 segundos) -- probablemente una doble pulsación o un disparo accidental. Devuelva la persiana a la posición completamente abierta con su mando e inténtelo de nuevo.",
-        "timed_cal_too_long": "El recorrido superó los 120 segundos -- es posible que la persiana siga en movimiento. Devuelva la persiana a la posición completamente abierta con su mando e inténtelo de nuevo en los próximos 2 minutos."
+        "timed_cal_too_long": "El recorrido superó los 120 segundos -- es posible que la persiana siga en movimiento. Devuelva la persiana a la posición completamente abierta con su mando e inténtelo de nuevo en los próximos 2 minutos.",
+        "remote_is_motor": "Ese botón está registrado en un motor, no en un mando — elija un botón diferente.",
+        "remote_already_bound": "Ese mando ya está vinculado a {other_motor_name} — desvinculelo allí primero.",
+        "remote_press_mismatch": "Las dos pulsaciones no coincidieron — inténtelo de nuevo.",
+        "remote_capture_timeout": "Mando no detectado — pulse un botón dentro de la ventana de escucha.",
+        "remote_capture_disconnected": "El stick USB se desconectó — reconéctelo e inténtelo de nuevo.",
+        "hub_not_loaded": "El hub USB no está cargado. Compruebe la configuración del hub e inténtelo de nuevo."
       },
       "abort": {
         "pairing_timeout": "Ningún dispositivo respondió en 2 minutos. Por favor, inténtelo de nuevo.",
         "pairing_failed": "Error en el emparejamiento.",
         "device_not_found": "No se pudo encontrar el dispositivo seleccionado. Por favor, inténtelo de nuevo.",
         "timed_cal_incomplete": "La calibración está incompleta -- los tiempos de apertura y cierre no se midieron ambos. Por favor, inicie la calibración de nuevo.",
-        "reconfigure_successful": "Calibración completada con éxito"
+        "reconfigure_successful": "Configuración guardada correctamente"
       }
     }
   },
