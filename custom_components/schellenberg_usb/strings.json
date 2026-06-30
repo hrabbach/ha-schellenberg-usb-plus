@@ -148,7 +148,7 @@
       "error": {
         "pairing_timeout": "No device responded within 2 minutes. Please try again and ensure you press the pairing button on your blind motor.",
         "pairing_failed": "Pairing failed.",
-        "delegation_failed": "Pairing command failed — the stick was busy or disconnected. Make sure the motor is in learn mode, then try again.",
+        "delegation_failed": "Pairing command failed — the stick did not respond in time, was busy, or got disconnected. Make sure the motor is in learn mode, then try again.",
         "device_limit_reached": "Device limit reached. This stick can address about 240 motors and all slots are in use. Remove an unused motor before adding a new one.",
         "calibration_timeout": "Calibration timed out. The blind took more than 5 minutes to complete the movement. Please check the device and try again.",
         "calibration_start_timeout": "Timeout waiting for the blind to start moving. Please ensure the device is properly connected and try again.",

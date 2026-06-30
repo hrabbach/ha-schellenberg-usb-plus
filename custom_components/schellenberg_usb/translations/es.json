@@ -148,7 +148,7 @@
       "error": {
         "pairing_timeout": "Ningún dispositivo respondió en 2 minutos. Por favor, inténtelo de nuevo y asegúrese de presionar el botón de emparejamiento en su motor de persiana.",
         "pairing_failed": "Error en el emparejamiento.",
-        "delegation_failed": "El comando de emparejamiento falló — el stick estaba ocupado o desconectado. Asegúrese de que el motor está en modo aprendizaje e inténtelo de nuevo.",
+        "delegation_failed": "El comando de emparejamiento falló — el stick no respondió a tiempo, estaba ocupado o se desconectó. Asegúrese de que el motor está en modo aprendizaje e inténtelo de nuevo.",
         "device_limit_reached": "Límite de dispositivos alcanzado. Este stick puede gestionar unos 240 motores y todos los espacios están en uso. Elimine un motor que ya no utilice antes de añadir uno nuevo.",
         "calibration_timeout": "Tiempo de calibración agotado. La persiana tardó más de 5 minutos en completar el movimiento. Por favor, verifique el dispositivo e inténtelo de nuevo.",
         "calibration_start_timeout": "Tiempo de espera agotado para que la persiana comience a moverse. Por favor, asegúrese de que el dispositivo esté correctamente conectado e inténtelo de nuevo.",

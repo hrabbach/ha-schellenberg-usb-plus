@@ -148,7 +148,7 @@
       "error": {
         "pairing_timeout": "Kein Gerät hat innerhalb von 2 Minuten geantwortet. Bitte versuchen Sie es erneut und stellen Sie sicher, dass Sie die Kopplungstaste an Ihrem Rollladenmotor drücken.",
         "pairing_failed": "Kopplung fehlgeschlagen.",
-        "delegation_failed": "Kopplungsbefehl fehlgeschlagen — der Stick war beschäftigt oder getrennt. Stellen Sie sicher, dass der Motor im Lernmodus ist, und versuchen Sie es erneut.",
+        "delegation_failed": "Kopplungsbefehl fehlgeschlagen — der Stick hat nicht rechtzeitig geantwortet, war beschäftigt oder wurde getrennt. Stellen Sie sicher, dass der Motor im Lernmodus ist, und versuchen Sie es erneut.",
         "device_limit_reached": "Gerätelimit erreicht. Dieser Stick kann ca. 240 Motoren ansteuern und alle Slots sind belegt. Entfernen Sie einen nicht mehr genutzten Motor, bevor Sie einen neuen hinzufügen.",
         "calibration_timeout": "Kalibrierung abgelaufen. Der Rollladen hat mehr als 5 Minuten für die Bewegung benötigt. Bitte überprüfen Sie das Gerät und versuchen Sie es erneut.",
         "calibration_start_timeout": "Zeitüberschreitung beim Warten auf die Bewegung des Rollladens. Bitte stellen Sie sicher, dass das Gerät ordnungsgemäß angeschlossen ist, und versuchen Sie es erneut.",

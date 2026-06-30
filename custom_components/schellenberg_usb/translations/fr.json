@@ -148,7 +148,7 @@
       "error": {
         "pairing_timeout": "Aucun appareil n'a répondu dans les 2 minutes. Veuillez réessayer et vous assurer d'appuyer sur le bouton d'appairage de votre moteur de volet.",
         "pairing_failed": "Échec de l'appairage.",
-        "delegation_failed": "La commande d'appairage a échoué — le stick était occupé ou déconnecté. Assurez-vous que le moteur est en mode apprentissage, puis réessayez.",
+        "delegation_failed": "La commande d'appairage a échoué — le stick n'a pas répondu à temps, était occupé ou a été déconnecté. Assurez-vous que le moteur est en mode apprentissage, puis réessayez.",
         "device_limit_reached": "Limite d'appareils atteinte. Ce stick peut gérer environ 240 moteurs et tous les emplacements sont occupés. Supprimez un moteur inutilisé avant d'en ajouter un nouveau.",
         "calibration_timeout": "Délai de calibration dépassé. Le volet a mis plus de 5 minutes pour terminer le mouvement. Veuillez vérifier l'appareil et réessayer.",
         "calibration_start_timeout": "Délai d'attente dépassé pour le début du mouvement du volet. Veuillez vous assurer que l'appareil est correctement connecté et réessayer.",
