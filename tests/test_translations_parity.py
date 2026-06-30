@@ -1,9 +1,11 @@
 """Translation key-parity test — Phase 15, Plan 03 (REVIEW finding 7).
 
-This is the SOLE authoritative key-parity gate for Phase 15 translation keys.
+This is the SOLE authoritative key-parity gate for the translation keys.
 No Node validator exists — this Python test (run under the WSL pytest gate) is
-the machine-enforced guarantee that every key path under
-``config_subentries.blind`` in strings.json exists in all four locale files.
+the machine-enforced guarantee that the full key-path surface of strings.json
+and every locale file match in BOTH directions (WR-02), so neither a missing
+key nor a block present only in the locales (e.g. ``entity.event``) can drift
+unnoticed.
 
 Additional Phase 15 assertions:
 - No ``change_confirm`` step (REVIEW finding 6: change path reuses listen_confirm).
@@ -98,30 +100,35 @@ def strings_blind(strings: dict) -> dict:  # type: ignore[type-arg]
 # ---------------------------------------------------------------------------
 
 
-def test_locale_files_mirror_strings_blind_key_paths(
-    strings_blind: dict,  # type: ignore[type-arg]
+def test_locale_files_mirror_strings_key_paths(
+    strings: dict,  # type: ignore[type-arg]
     locales: dict[str, dict],  # type: ignore[type-arg]
 ) -> None:
-    """Every leaf key path under config_subentries.blind in strings.json must
-    exist in all four locale files at the same path.
+    """Full-document key-path parity between strings.json and every locale.
 
-    Failure message names the offending ``<locale>: <path>`` so drift is
-    immediately actionable.
+    Every leaf key path in strings.json must exist in all four locale files at
+    the same path, AND every leaf key path in each locale must exist in
+    strings.json — across the WHOLE translation surface (config,
+    config_subentries, options, entity, services, issues), not just
+    config_subentries.blind (WR-02).
+
+    The reverse direction (locale -> strings) is what catches a block present in
+    the locales but absent from strings.json — exactly the ``entity.event``
+    drift in WR-01. Failure message names each offending ``<locale>: <path>``.
     """
-    source_paths = _leaf_paths(strings_blind)
-    missing: list[str] = []
+    source_paths = set(_leaf_paths(strings))
+    drift: list[str] = []
 
-    for path in source_paths:
-        full_path = f"config_subentries.blind.{path}"
-        for locale, locale_dict in locales.items():
-            try:
-                _resolve_path(locale_dict, full_path)
-            except KeyError:
-                missing.append(f"{locale}: {full_path}")
+    for locale, locale_dict in locales.items():
+        locale_paths = set(_leaf_paths(locale_dict))
+        for path in sorted(source_paths - locale_paths):
+            drift.append(f"{locale}: missing '{path}' (present in strings.json)")
+        for path in sorted(locale_paths - source_paths):
+            drift.append(f"{locale}: extra '{path}' (absent from strings.json)")
 
-    assert not missing, (
-        "The following key paths from strings.json are missing in locale files:\n"
-        + "\n".join(f"  - {m}" for m in missing)
+    assert not drift, (
+        "Translation key-path parity drift between strings.json and locales:\n"
+        + "\n".join(f"  - {d}" for d in drift)
     )
 
 

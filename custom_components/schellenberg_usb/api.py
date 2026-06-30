@@ -1173,6 +1173,25 @@ class SchellenbergUsbApi:
         finally:
             self._learn_remote_raw_future = None
 
+    def is_registered_motor(self, device_id: str) -> bool:
+        """Return True if device_id is an enrolled motor (not a bound remote).
+
+        Public accessor for the config-flow binding policy so the flow does not
+        reach into the private registration dicts (WR-05).
+        """
+        return (
+            device_id in self._registered_devices
+            and device_id not in self._remote_to_motor
+        )
+
+    def bound_motor_for(self, remote_id: str) -> str | None:
+        """Return the motor a remote is bound to, or None if it is unbound.
+
+        Public accessor over `_remote_to_motor` for the config-flow binding
+        policy (WR-05).
+        """
+        return self._remote_to_motor.get(remote_id)
+
     async def verify_device(self, *, heartbeat_probe: bool = False) -> bool:
         """Verify this is a Schellenberg USB stick by sending !? command.
 

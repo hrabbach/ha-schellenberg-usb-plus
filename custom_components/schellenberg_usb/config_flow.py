@@ -713,6 +713,25 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
             menu_options=menu_options,
         )
 
+    def _reset_capture_round(self) -> None:
+        """Tear down any in-flight capture tasks and clear the per-round id.
+
+        Called on every FRESH entry into the capture flow — the reconfigure
+        menu and a fresh listen_first (bind / change / retry edges) — so a
+        leftover listen task or a stale _first_capture_id from an abandoned
+        prior round can never bleed into the next round (WR-03 / WR-04). Does
+        NOT touch _is_change_mode or the error carry vars; callers own those.
+        """
+        if self._listen_first_task is not None:
+            if not self._listen_first_task.done():
+                self._listen_first_task.cancel()
+            self._listen_first_task = None
+        if self._listen_second_task is not None:
+            if not self._listen_second_task.done():
+                self._listen_second_task.cancel()
+            self._listen_second_task = None
+        self._first_capture_id = None
+
     async def async_step_reconfigure_menu(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
@@ -723,17 +742,10 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         to the menu (REVIEW finding 2 + finding 4 state hygiene, mirrors the
         async_step_menu hygiene at config_flow.py:272–275).
         """
-        # Cancel-and-clear any pending capture tasks (REVIEW finding 2).
-        if self._listen_first_task is not None:
-            if not self._listen_first_task.done():
-                self._listen_first_task.cancel()
-            self._listen_first_task = None
-        if self._listen_second_task is not None:
-            if not self._listen_second_task.done():
-                self._listen_second_task.cancel()
-            self._listen_second_task = None
-        # Reset all capture state vars (REVIEW finding 4).
-        self._first_capture_id = None
+        # Cancel-and-clear capture tasks + the per-round id (REVIEW finding 2,
+        # WR-04) via the shared helper, then reset the remaining menu-scoped
+        # state vars (REVIEW finding 4).
+        self._reset_capture_round()
         self._is_change_mode = False
         self._listen_error_key = None
         self._listen_error_placeholders = None
@@ -929,6 +941,12 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
             self._listen_first_task = None
 
         if self._listen_first_task is None:
+            # Fresh entry (bind / change / a confirm- or timeout-"Try again"
+            # edge that bypasses reconfigure_menu): tear down any leftover
+            # second-capture task and clear a stale _first_capture_id so the
+            # new round starts clean (WR-03 / WR-04). Not reached on the
+            # progress-poll re-entry, where the task is still pending.
+            self._reset_capture_round()
             hub_entry = self._get_entry()
             api = hub_entry.runtime_data
             if api is None:
@@ -986,10 +1004,7 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
             )
 
         # Case A: captured id is an enrolled motor (not a remote).
-        if (
-            captured_id in api._registered_devices
-            and captured_id not in api._remote_to_motor
-        ):
+        if api.is_registered_motor(captured_id):
             _LOGGER.warning(
                 "Remote bind rejected: captured id %s is a registered motor",
                 captured_id,
@@ -1001,8 +1016,8 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
             )
 
         # Case B: captured id is already bound to a different motor.
-        if captured_id in api._remote_to_motor:
-            other_motor_id = api._remote_to_motor[captured_id]
+        other_motor_id = api.bound_motor_for(captured_id)
+        if other_motor_id is not None:
             subentry = self._get_reconfigure_subentry()
             this_motor_id = subentry.data.get("device_id")
             if other_motor_id != this_motor_id:

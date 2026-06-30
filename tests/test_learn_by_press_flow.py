@@ -93,6 +93,19 @@ def mock_hub_entry(hass: HomeAssistant) -> ConfigEntry:
     mock_api._registered_devices = {}
     mock_api._remote_to_motor = {}
     mock_api.is_connected = True
+    # WR-05: the flow now calls public accessors instead of poking the private
+    # registration dicts. Back them with side_effects that read the (possibly
+    # per-test reassigned) dicts at call time so existing policy tests are
+    # exercised through the real public surface.
+    mock_api.is_registered_motor = MagicMock(
+        side_effect=lambda did: (
+            did in mock_api._registered_devices
+            and did not in mock_api._remote_to_motor
+        )
+    )
+    mock_api.bound_motor_for = MagicMock(
+        side_effect=lambda rid: mock_api._remote_to_motor.get(rid)
+    )
     entry.runtime_data = mock_api  # type: ignore[attr-defined]
     return entry
 
@@ -880,3 +893,86 @@ async def test_remove_confirm_apply_deletes_key(
     mock_reload.assert_called_once_with(mock_hub_entry.entry_id)
     assert result["type"] == "abort"
     assert result["reason"] == "reconfigure_successful"
+
+
+# ---------------------------------------------------------------------------
+# Capture-state hygiene on fresh listen_first entry (WR-03 / WR-04)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_listen_first_clears_stale_capture_id_on_reentry(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """A fresh listen_first clears a stale _first_capture_id (WR-03).
+
+    Simulates a confirm-/timeout-"Try again" edge that re-enters listen_first
+    with a leftover id, where the retry capture then times out — so the success
+    branch that would re-set _first_capture_id is never reached. Only the
+    fresh-entry reset can clear the stale id, ensuring it can never be carried
+    into a later confirm/persist.
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_no_remote_subentry()
+    handler._first_capture_id = "STALE1"  # leftover from a prior round
+    mock_hub_entry.runtime_data.learn_remote_raw_and_wait = AsyncMock(  # type: ignore[union-attr]
+        return_value=None  # capture times out
+    )
+    mock_hub_entry.runtime_data.is_connected = True  # type: ignore[union-attr]
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+        result = await handler.async_step_listen_first(None)
+        if result["type"] == FlowResultType.SHOW_PROGRESS:
+            await asyncio.sleep(0)
+            await handler.async_step_listen_first(None)
+
+    assert handler._first_capture_id is None, (
+        "stale _first_capture_id must be cleared on a fresh listen_first entry "
+        "(WR-03)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_listen_first_cancels_leftover_second_task(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """A fresh listen_first cancels a leftover second-capture task (WR-04).
+
+    Seeds a pending _listen_second_task from an abandoned prior round and
+    re-enters listen_first via a fresh edge that bypasses reconfigure_menu. The
+    leftover task must be cancelled and cleared so it cannot resolve into the
+    new round.
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_no_remote_subentry()
+
+    cancelled = False
+
+    class _FakeTask:
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> None:
+            nonlocal cancelled
+            cancelled = True
+
+    handler._listen_second_task = _FakeTask()  # type: ignore[assignment]
+    mock_hub_entry.runtime_data.learn_remote_raw_and_wait = AsyncMock(  # type: ignore[union-attr]
+        return_value="AABBCC"
+    )
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+        result = await handler.async_step_listen_first(None)
+        if result["type"] == FlowResultType.SHOW_PROGRESS:
+            await asyncio.sleep(0)
+            await handler.async_step_listen_first(None)
+
+    assert cancelled is True, (
+        "leftover _listen_second_task must be cancelled on a fresh listen_first "
+        "entry (WR-04)"
+    )
+    assert handler._listen_second_task is None
