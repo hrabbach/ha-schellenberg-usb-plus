@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Timed motors with a bound physical remote now track position in Home Assistant when the remote is used: the position loop starts automatically on a remote open or close press (including jog presses) and latches the best-effort elapsed-time position on a remote stop press.
+- Each timed motor with a bound remote now exposes a Home Assistant event entity that fires when you press the physical remote's buttons (open, close, stop, and hold-up / hold-down), grouped under the motor's device. You can use remote button presses directly as automation triggers. Bidirectional motors and motors without a bound remote do not get an event entity.
 
 ## [1.1.0] - 2026-06-29
 
