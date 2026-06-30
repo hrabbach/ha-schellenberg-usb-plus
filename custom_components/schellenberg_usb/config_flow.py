@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections.abc import Awaitable
@@ -25,8 +26,10 @@ from .const import (
     CONF_DEVICE_ID,
     CONF_INITIAL_POSITION,
     CONF_OPEN_TIME,
+    CONF_REMOTE_ID,
     CONF_SERIAL_PORT,
     DOMAIN,
+    LEARN_REMOTE_CAPTURE_TIMEOUT,  # noqa: F401 — used in capture steps below
     SUBENTRY_TYPE_BLIND,
 )
 from .api import DeviceLimitReached
@@ -222,6 +225,17 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         self._pending_device_enum: str | None = None
         self._pending_device_name: str | None = None
         self._pending_is_bidirectional: bool = False
+        # Phase 15: capture state for learn-by-press remote binding (D-03..D-10)
+        self._first_capture_id: str | None = None
+        self._is_change_mode: bool = False
+        self._listen_first_task: asyncio.Task[Any] | None = None
+        self._listen_second_task: asyncio.Task[Any] | None = None
+        # Error-carry vars so listen_timeout renders the correct one of four
+        # error keys (remote_capture_timeout / remote_capture_disconnected /
+        # remote_is_motor / remote_already_bound / remote_press_mismatch)
+        # that was set by the preceding listen_first/listen_second/policy step.
+        self._listen_error_key: str | None = None
+        self._listen_error_placeholders: dict[str, str] | None = None
 
     def _get_calibration_handler(self) -> CalibrationFlowHandler:
         """Return (and lazily create) the calibration flow handler."""
@@ -677,8 +691,61 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
+        """Entry point: show adaptive menu based on current remote binding state.
+
+        Shows ["calibrate", "bind_remote"] when no remote is bound, or
+        ["calibrate", "change_remote", "remove_remote"] when a remote_id exists
+        in the subentry data (D-01/D-02).
+
+        async_show_menu(step_id="reconfigure_menu") REQUIRES a matching
+        async_step_reconfigure_menu to exist — HA raises UnknownStep otherwise.
+        """
+        subentry = self._get_reconfigure_subentry()
+        if not subentry.data.get("device_id"):
+            return self.async_abort(reason="device_not_found")
+        has_remote = bool(subentry.data.get(CONF_REMOTE_ID))
+        if has_remote:
+            menu_options = ["calibrate", "change_remote", "remove_remote"]
+        else:
+            menu_options = ["calibrate", "bind_remote"]
+        return self.async_show_menu(
+            step_id="reconfigure_menu",
+            menu_options=menu_options,
+        )
+
+    async def async_step_reconfigure_menu(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Re-entry point for the reconfigure menu; resets all capture state.
+
+        Cancels any pending capture tasks and clears carry vars so an abandoned
+        listen cannot leak a progress task or raw future when the user backs out
+        to the menu (REVIEW finding 2 + finding 4 state hygiene, mirrors the
+        async_step_menu hygiene at config_flow.py:272–275).
+        """
+        # Cancel-and-clear any pending capture tasks (REVIEW finding 2).
+        if self._listen_first_task is not None:
+            if not self._listen_first_task.done():
+                self._listen_first_task.cancel()
+            self._listen_first_task = None
+        if self._listen_second_task is not None:
+            if not self._listen_second_task.done():
+                self._listen_second_task.cancel()
+            self._listen_second_task = None
+        # Reset all capture state vars (REVIEW finding 4).
+        self._first_capture_id = None
+        self._is_change_mode = False
+        self._listen_error_key = None
+        self._listen_error_placeholders = None
+        return await self.async_step_reconfigure(user_input)
+
+    async def async_step_calibrate(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
         """Configure a blind: run calibration for the single device under this subentry.
 
+        This is the OLD async_step_reconfigure body, moved verbatim so existing
+        calibration routing (timed vs bidirectional) is unchanged (CTRL-05).
         We bypass storage lookup and set the calibration handler's selected device
         directly from the subentry data to avoid device_not_found errors before
         calibration has ever run.
@@ -707,7 +774,8 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         if not is_bidirectional:
             # CAL-01 / D-01: route timed motor to the event-free timed flow.
             _LOGGER.debug(
-                "Reconfigure: routing timed motor %s to TimedCalibrationFlowHandler",
+                "Calibrate: routing timed motor %s to"
+                " TimedCalibrationFlowHandler",
                 device_id,
             )
             handler_tc = self._get_timed_cal_handler()

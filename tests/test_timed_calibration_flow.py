@@ -143,7 +143,7 @@ async def test_timed_cal_precondition_shows_form(
             new_callable=AsyncMock,
             return_value={"type": "form", "step_id": "timed_cal_precondition"},
         ) as mock_step:
-            result = await handler.async_step_reconfigure(None)
+            result = await handler.async_step_calibrate(None)
 
     assert result["type"] == "form", f"Expected form, got {result['type']!r}"
     assert result["step_id"] == "timed_cal_precondition", (
@@ -472,7 +472,7 @@ async def test_reconfigure_bidirectional_routes_to_legacy(
                 "async_step_timed_cal_precondition",
                 new_callable=AsyncMock,
             ) as mock_timed_step:
-                result = await handler_bi.async_step_reconfigure(None)
+                result = await handler_bi.async_step_calibrate(None)
 
     # Bidirectional motor must go to the legacy calibration step
     mock_cal_step.assert_called_once()
