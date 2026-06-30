@@ -162,6 +162,22 @@
     }
   },
   "entity": {
+    "event": {
+      "remote_button": {
+        "name": "Bouton de télécommande",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "up": "Monter",
+              "down": "Descendre",
+              "stop": "Arrêter",
+              "hold_up": "Maintenir monter",
+              "hold_down": "Maintenir descendre"
+            }
+          }
+        }
+      }
+    },
     "sensor": {
       "connection_status": {
         "name": "État de connexion"

@@ -162,6 +162,22 @@
     }
   },
   "entity": {
+    "event": {
+      "remote_button": {
+        "name": "Remote button",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "up": "Up",
+              "down": "Down",
+              "stop": "Stop",
+              "hold_up": "Hold up",
+              "hold_down": "Hold down"
+            }
+          }
+        }
+      }
+    },
     "sensor": {
       "connection_status": {
         "name": "Connection status"

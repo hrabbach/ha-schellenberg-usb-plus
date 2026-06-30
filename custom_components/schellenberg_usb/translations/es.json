@@ -162,6 +162,22 @@
     }
   },
   "entity": {
+    "event": {
+      "remote_button": {
+        "name": "Botón del mando",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "up": "Subir",
+              "down": "Bajar",
+              "stop": "Parar",
+              "hold_up": "Mantener subir",
+              "hold_down": "Mantener bajar"
+            }
+          }
+        }
+      }
+    },
     "sensor": {
       "connection_status": {
         "name": "Estado de conexión"

@@ -82,9 +82,7 @@ async def test_dedup_quiet_period_reset(hass: HomeAssistant) -> None:
 
         # Simulate that the quiet period has elapsed for this dedup key
         dedup_key = ("REM001", "ABCD")
-        api._dedup_cache[dedup_key] = (
-            hass.loop.time() - REMOTE_DEDUP_WINDOW - 0.001
-        )
+        api._dedup_cache[dedup_key] = hass.loop.time() - REMOTE_DEDUP_WINDOW - 0.001
 
         # Same frame again — quiet period expired, counts as a new press
         api._handle_message("ss10REM001ABCD01PP00")
@@ -306,3 +304,113 @@ async def test_disconnect_clears_dedup_state(hass: HomeAssistant) -> None:
     assert len(api._dedup_handles) == 0
     # The handle should have been cancelled
     assert handle.cancelled()
+
+
+# ---------------------------------------------------------------------------
+# Phase 13 D-04: ref-count + re-bind drift documentation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_register_remote_ref_count(hass: HomeAssistant) -> None:
+    """Double-register then single unregister keeps the mapping alive (D-04).
+
+    For a timed+bound motor, both cover_entity (Phase 12) and event_entity
+    (Phase 13) call register_remote for the same (remote_id, motor_id).
+    After the first unregister (ref drops from 2 to 1), the mapping must
+    still be present so the still-live entity continues to route correctly.
+    """
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    api.register_remote("REM001", "MOT001", "10")
+    api.register_remote("REM001", "MOT001", "10")
+    api.unregister_remote("REM001")
+    # Mapping still present after first unregister (ref=1 remains)
+    assert api._remote_to_motor.get("REM001") == "MOT001"
+
+
+@pytest.mark.asyncio
+async def test_unregister_remote_ref_count_full(hass: HomeAssistant) -> None:
+    """Second unregister (ref=0) fully removes mapping (D-04).
+
+    After both entities tear down, all three dicts must be clean — no
+    stale entries that could accumulate across a reload.
+    """
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    api.register_remote("REM001", "MOT001", "10")
+    api.register_remote("REM001", "MOT001", "10")
+    api.unregister_remote("REM001")
+    api.unregister_remote("REM001")
+    assert api._remote_to_motor.get("REM001") is None
+    assert api._registered_devices.get("REM001") is None
+    assert api._remote_ref_counts.get("REM001") is None
+
+
+@pytest.mark.asyncio
+async def test_api_triple_dispatch_when_remote_registered(hass: HomeAssistant) -> None:
+    """api.py GATE 3 triple-dispatches for any remote registered via register_remote.
+
+    The bidirectional-exclusion guard lives in event.py (GUARD 2), not in api.py.
+    api.py is policy-free: it routes whatever register_remote declares.
+    This test verifies the API-layer dispatch, NOT event.py creation behavior.
+    SIGNAL_DEVICE_EVENT bridge remains byte-for-byte unchanged (RMT-07).
+    A single fresh frame produces exactly 3 dispatches: the triple dispatch.
+    """
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    api.register_remote("REM001", "MOT001", "10")
+
+    with patch(
+        "custom_components.schellenberg_usb.api.async_dispatcher_send"
+    ) as mock_send:
+        api._handle_message("ss10REM001EFGH01PP00")
+
+        # Exactly 3 dispatches (triple dispatch, byte-for-byte RMT-07)
+        assert mock_send.call_count == 3
+        calls = [c[0] for c in mock_send.call_args_list]
+        signals = [c[1] for c in calls]
+
+        # SIGNAL_REMOTE_EVENT fires (additive, D-05)
+        assert f"{SIGNAL_REMOTE_EVENT}_MOT001" in signals
+        # SIGNAL_DEVICE_EVENT bridge unchanged (RMT-07)
+        assert f"{SIGNAL_DEVICE_EVENT}_REM001" in signals
+        assert f"{SIGNAL_DEVICE_EVENT}_MOT001" in signals
+
+
+@pytest.mark.asyncio
+async def test_register_remote_rebind_drift_documented(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Lock the accepted re-bind-drift behavior (review finding #6).
+
+    Re-binding a remote to a DIFFERENT motor overwrites _remote_to_motor and
+    increments the count (not reset). A full teardown-to-zero (mirroring the
+    Phase 15 reload) then cleans all three dicts — drift cannot accumulate
+    across a reload. This test documents the disposition as a regression-lock,
+    not a guard.
+    """
+    import logging
+
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+
+    with caplog.at_level(
+        logging.WARNING, logger="custom_components.schellenberg_usb.api"
+    ):
+        # First registration: remote → motorA
+        api.register_remote("REM001", "MOTA01", "10")
+        # Re-bind to a DIFFERENT motor (triggers WR-03 warning on second call)
+        api.register_remote("REM001", "MOTB01", "11")
+
+    # (a) Mapping is overwritten to the new motor
+    assert api._remote_to_motor["REM001"] == "MOTB01"
+    # (b) Count is incremented (not reset) — drift is accepted, not guarded
+    assert api._remote_ref_counts["REM001"] == 2
+    # (c) WR-03 re-bind warning was logged
+    assert any("re-bound from" in record.message for record in caplog.records)
+
+    # Simulate Phase 15 reload teardown: both entities unregister
+    api.unregister_remote("REM001")
+    api.unregister_remote("REM001")
+
+    # All three dicts clean — drift cannot accumulate across a full teardown
+    assert api._remote_to_motor.get("REM001") is None
+    assert api._registered_devices.get("REM001") is None
+    assert api._remote_ref_counts.get("REM001") is None

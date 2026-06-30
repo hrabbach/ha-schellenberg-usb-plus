@@ -15,8 +15,12 @@ DOMAIN = "schellenberg_usb"
 # Type alias for config entry with runtime data
 type SchellenbergConfigEntry = ConfigEntry[SchellenbergUsbApi]
 
-# Platform for the cover entities
-PLATFORMS = ["cover", "sensor", "switch"]
+# Platform setup order matters for ref-count correctness: cover MUST precede
+# event so that cover entity register_remote (ref_count→1) runs before
+# event entity register_remote (ref_count→2). If event loaded first and
+# then failed during setup, ref_count would drop back to 0 on removal
+# before cover ever registered, stranding the cover dispatcher subscription.
+PLATFORMS = ["cover", "event", "sensor", "switch"]
 
 # Subentry types
 SUBENTRY_TYPE_LED = "led"
@@ -153,3 +157,15 @@ REMOTE_DEDUP_WINDOW = 1.0
 
 # seconds — learn-window default timeout (not UI-exposed)
 LEARN_REMOTE_TIMEOUT = 30.0
+
+# Remote button press → HA event type (Phase 13, D-01)
+# 01=up, 02=down, 00=stop, 41=hold_up, 42=hold_down
+# NOTE: the event entity does NOT fold 41/42 into up/down.
+# Contrast Phase 12 cover, which normalises them for position tracking.
+REMOTE_EVENT_MAP: dict[str, str] = {
+    CMD_UP: "up",  # "01"
+    CMD_DOWN: "down",  # "02"
+    CMD_STOP: "stop",  # "00"
+    CMD_MANUAL_UP: "hold_up",  # "41"
+    CMD_MANUAL_DOWN: "hold_down",  # "42"
+}
