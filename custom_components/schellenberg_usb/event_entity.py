@@ -22,13 +22,6 @@ class SchellenbergRemoteEventEntity(EventEntity):
     _attr_translation_key = "remote_button"
     _attr_should_poll = False
     _attr_device_class = EventDeviceClass.BUTTON
-    _attr_event_types: list[str] = [
-        "up",
-        "down",
-        "stop",
-        "hold_up",
-        "hold_down",
-    ]
 
     def __init__(
         self,
@@ -42,6 +35,13 @@ class SchellenbergRemoteEventEntity(EventEntity):
         self._device_id = device_id
         self._device_enum = device_enum
         self._remote_id = remote_id
+        self._attr_event_types: list[str] = [
+            "up",
+            "down",
+            "stop",
+            "hold_up",
+            "hold_down",
+        ]
 
         self._attr_unique_id = f"schellenberg_{device_id}_remote_button"
         self._attr_device_info = DeviceInfo(
@@ -62,12 +62,14 @@ class SchellenbergRemoteEventEntity(EventEntity):
             self._remote_id, self._device_id, self._device_enum
         )
 
-        # Capture into a local to avoid holding self reference in the
-        # closure (mirrors cover_entity.py:351 pattern).
+        # Snapshot both api and remote_id so the closure captures no
+        # implicit self reference (self._api evaluated at call-time
+        # would still hold self alive via the closure).
+        api_snapshot = self._api
         remote_id_snapshot = self._remote_id
 
         def _cleanup_remote() -> None:
-            self._api.unregister_remote(remote_id_snapshot)
+            api_snapshot.unregister_remote(remote_id_snapshot)
 
         self.async_on_remove(_cleanup_remote)
         self.async_on_remove(
