@@ -15,7 +15,11 @@ DOMAIN = "schellenberg_usb"
 # Type alias for config entry with runtime data
 type SchellenbergConfigEntry = ConfigEntry[SchellenbergUsbApi]
 
-# Platform for the cover entities
+# Platform setup order matters for ref-count correctness: cover MUST precede
+# event so that cover entity register_remote (ref_count→1) runs before
+# event entity register_remote (ref_count→2). If event loaded first and
+# then failed during setup, ref_count would drop back to 0 on removal
+# before cover ever registered, stranding the cover dispatcher subscription.
 PLATFORMS = ["cover", "event", "sensor", "switch"]
 
 # Subentry types
