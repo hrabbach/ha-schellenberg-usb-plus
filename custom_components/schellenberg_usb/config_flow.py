@@ -264,6 +264,15 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         handler (it raises UnknownStep otherwise). Selecting an option routes
         to async_step_{option}: 'pair', 'manual_add', or 'delegate'.
         """
+        # Reset the per-flow pending state at the menu (the single re-entry
+        # point for every branch) so a value populated by one branch — e.g.
+        # a delegation-populated _pending_device_id — cannot leak into another
+        # branch's guard if the user backs up to the menu and picks a
+        # different option (WR-03 state hygiene).
+        self._pending_device_id = None
+        self._pending_device_enum = None
+        self._pending_device_name = None
+        self._pending_is_bidirectional = False
         return self.async_show_menu(
             step_id="menu",
             menu_options=["pair", "manual_add", "delegate"],
