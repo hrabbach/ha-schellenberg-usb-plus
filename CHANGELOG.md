@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   ### Removed       — removed features
 -->
 
+## [1.2.3] - 2026-07-01
+
+### Fixed
+
+- A bound physical remote now controls position tracking and fires its button events: pressing up/stop/down on the remote is recognized and starts/stops the motor's position loop and the remote-button event entity. Previously the integration received these presses but ignored them as "unknown" because a handheld remote transmits different command codes than the USB stick.
+
 ## [1.2.2] - 2026-07-01
 
 ### Fixed
@@ -78,7 +84,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Stick status sensors (connection status, firmware version, mode)
 - HACS-compatible via zip_release delivery
 
-[unreleased]: https://github.com/hrabbach/ha-schellenberg-usb-plus/compare/v1.2.2...HEAD
+[unreleased]: https://github.com/hrabbach/ha-schellenberg-usb-plus/compare/v1.2.3...HEAD
+[1.2.3]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.2.3
 [1.2.2]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.2.2
 [1.2.1]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.2.1
 [1.2.0]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.2.0
