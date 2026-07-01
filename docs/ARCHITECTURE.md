@@ -127,7 +127,9 @@ After a successful connect, two background tasks are started:
 | `tE` | — | Stick busy; clears `_in_flight_command`, enqueues it into `_retry_queue` (drops with warning if queue is full) |
 | `sr{6}` | `sr5D3E7C` | Device ID response; resolves `_device_id_future` |
 | `sl{...}` | `sl00BE{6-char-id}...` | Pairing/list response; device ID extracted at `[6:12]` (requires `len >= 12`); resolves `_pairing_future` during pairing |
-| `ss{...}` | `ss{enum:2}{device_id:6}{incr:4}{cmd:2}{pad:2}{rssi:2}` | Inbound device event (requires `len >= 18`); device enum at `[2:4]`, device ID at `[4:10]`, command at `[14:16]`; dispatches `SIGNAL_DEVICE_EVENT_{device_id}` |
+| `ss{...}` | `ss{enum:2}{device_id:6}{command:2}{counter:4}{hold:2}{check:2}` | Inbound device event (requires `len >= 18`); device enum at `[2:4]`, device ID at `[4:10]`, command at `[10:12]`, rolling per-press counter at `[12:16]`, hold-counter at `[16:18]`; dispatches `SIGNAL_DEVICE_EVENT_{device_id}` |
+
+> **⚠️ Inbound `ss` command byte is at `[10:12]`, not `[14:16]`.** The command follows the stick's own scheme: `00`=stop, `01`=up, `02`=down (same values as the outbound `CMD_*`). The bytes at `[12:16]` are a 16-bit rolling counter that increments by one on every distinct press, and `[16:18]` rises while a button is held. Slicing the command from `[14:16]` (the counter's low byte) makes every press decode as a different, ever-incrementing "unknown" code that never matches — the handheld remote appears paired but nothing moves in HA. Confirmed cross-session: the same DOWN press shows `[10:12]=02` in captures months apart while `[14:16]` differs. (Note: the outbound/transmit frame layout below is different — this trap is inbound-only.)
 
 ### Outbound command format
 
