@@ -190,13 +190,29 @@ def test_device_class_is_button(mock_api: SchellenbergUsbApi) -> None:
 
 
 # ---------------------------------------------------------------------------
-# REMOTE_EVENT_MAP consistency: all 5 CMD_* bytes present
+# REMOTE_EVENT_MAP consistency: stick codes + handheld-remote codes present
 # ---------------------------------------------------------------------------
 
 
-def test_remote_event_map_has_five_entries() -> None:
-    """REMOTE_EVENT_MAP must contain exactly 5 entries for the 5 event types."""
-    assert len(REMOTE_EVENT_MAP) == 5
+def test_remote_event_map_entries() -> None:
+    """REMOTE_EVENT_MAP maps both the stick codes and the handheld-remote codes.
+
+    5 stick codes (00/01/02/41/42) + 3 handheld-remote codes (82/83/84) = 8.
+    The handheld tap codes map to the SAME event types as the stick tap codes
+    (the handheld has no distinct hold code).
+    """
+    from custom_components.schellenberg_usb.const import (
+        CMD_DOWN,
+        CMD_MANUAL_DOWN,
+        CMD_MANUAL_UP,
+        CMD_REMOTE_DOWN,
+        CMD_REMOTE_STOP,
+        CMD_REMOTE_UP,
+        CMD_STOP,
+        CMD_UP,
+    )
+
+    assert len(REMOTE_EVENT_MAP) == 8
     assert set(REMOTE_EVENT_MAP.values()) == {
         "up",
         "down",
@@ -204,20 +220,16 @@ def test_remote_event_map_has_five_entries() -> None:
         "hold_up",
         "hold_down",
     }
-    # Named constants used as keys (no magic bytes in const.py)
-    from custom_components.schellenberg_usb.const import (
-        CMD_DOWN,
-        CMD_MANUAL_DOWN,
-        CMD_MANUAL_UP,
-        CMD_STOP,
-        CMD_UP,
-    )
-
+    # Stick-transmit codes
     assert REMOTE_EVENT_MAP[CMD_UP] == "up"
     assert REMOTE_EVENT_MAP[CMD_DOWN] == "down"
     assert REMOTE_EVENT_MAP[CMD_STOP] == "stop"
     assert REMOTE_EVENT_MAP[CMD_MANUAL_UP] == "hold_up"
     assert REMOTE_EVENT_MAP[CMD_MANUAL_DOWN] == "hold_down"
+    # Handheld-remote codes (hardware-observed 82/83/84)
+    assert REMOTE_EVENT_MAP[CMD_REMOTE_UP] == "up"
+    assert REMOTE_EVENT_MAP[CMD_REMOTE_DOWN] == "down"
+    assert REMOTE_EVENT_MAP[CMD_REMOTE_STOP] == "stop"
 
 
 # ---------------------------------------------------------------------------
