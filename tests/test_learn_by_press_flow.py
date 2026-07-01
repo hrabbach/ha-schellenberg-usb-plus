@@ -401,6 +401,168 @@ async def test_listen_first_progress_supplies_device_name(
 
 
 # ---------------------------------------------------------------------------
+# Progress-poll re-entry of a COMPLETED capture task (remote-bind-press-stuck)
+# ---------------------------------------------------------------------------
+#
+# Regression for the "listening screen hangs forever, no timeout" bug. In
+# production learn_remote_raw_and_wait() SUSPENDS (asyncio.wait_for on a future),
+# so the first async_step_listen_first(None) returns SHOW_PROGRESS with a PENDING
+# task. HA then registers progress_task.add_done_callback(schedule_configure),
+# which re-invokes async_step_listen_first(None) the instant the task completes.
+# On that re-entry the task is .done(); the step MUST read its result and advance
+# (SHOW_PROGRESS_DONE) — it must NOT clear the done task and re-arm a fresh
+# capture window (which loops forever, swallowing both the press and the timeout).
+#
+# The pre-existing tests never caught this because they mock the capture with an
+# AsyncMock that resolves synchronously (eager task done on creation), so they
+# read the result on the FIRST call and never exercise the pending->done re-entry.
+
+
+class _GatedCapture:
+    """A real (suspending) learn_remote_raw_and_wait stand-in.
+
+    Awaits an asyncio.Event, then returns a preset result — reproducing the
+    production coroutine that suspends on a future until a press resolves it
+    (or the timeout fires). Unlike an AsyncMock it does NOT resolve eagerly, so
+    the created task is genuinely pending and drives the real HA progress-task
+    re-entry path.
+    """
+
+    def __init__(self, result: str | None) -> None:
+        self._result = result
+        self.gate = asyncio.Event()
+        self.call_count = 0
+
+    async def __call__(self, timeout: float = 15.0) -> str | None:
+        self.call_count += 1
+        await self.gate.wait()
+        return self._result
+
+
+async def _await_task(handler: SchellenbergPairingSubentryFlow) -> None:
+    """Let the pending _listen_first_task run to completion."""
+    task = handler._listen_first_task
+    assert task is not None
+    await task
+
+
+@pytest.mark.asyncio
+async def test_listen_first_completed_task_reentry_advances(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """A completed capture task on progress-poll re-entry advances, not re-arms.
+
+    Reproduces remote-bind-press-stuck: first call spawns a genuinely PENDING
+    capture -> SHOW_PROGRESS. After the task resolves (press captured), the
+    framework re-invokes the step with user_input=None. That re-entry MUST read
+    the result and return SHOW_PROGRESS_DONE with _first_capture_id set — NOT
+    clear the done task and spawn a fresh capture (the forever-spinner bug).
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_no_remote_subentry()
+    capture = _GatedCapture(result="AABBCC")
+    mock_hub_entry.runtime_data.learn_remote_raw_and_wait = capture  # type: ignore[union-attr]
+    mock_hub_entry.runtime_data._registered_devices = {}  # type: ignore[union-attr]
+    mock_hub_entry.runtime_data._remote_to_motor = {}  # type: ignore[union-attr]
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+        # First entry: pending task -> SHOW_PROGRESS
+        first = await handler.async_step_listen_first(None)
+        assert first["type"] == FlowResultType.SHOW_PROGRESS, (
+            f"Expected SHOW_PROGRESS while capture pending, got {first['type']!r}"
+        )
+        pending_task = handler._listen_first_task
+
+        # Resolve the capture (simulate the remote press) and let it complete —
+        # this is when HA fires the add_done_callback re-entry.
+        capture.gate.set()
+        await _await_task(handler)
+        assert pending_task is not None and pending_task.done()
+
+        # Framework re-entry (user_input=None, same step). MUST advance.
+        second = await handler.async_step_listen_first(None)
+
+    assert second["type"] == FlowResultType.SHOW_PROGRESS_DONE, (
+        "progress-poll re-entry of a COMPLETED capture must advance "
+        "(SHOW_PROGRESS_DONE); got "
+        f"{second['type']!r} — the done task was cleared and a fresh capture "
+        "re-armed (the forever-spinner re-arm loop)."
+    )
+    assert handler._first_capture_id == "AABBCC"
+    # Exactly ONE capture window must have been opened (no re-arm).
+    assert capture.call_count == 1, (
+        f"capture re-armed {capture.call_count} times — expected exactly 1"
+    )
+
+
+@pytest.mark.asyncio
+async def test_listen_first_completed_timeout_reentry_advances(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """A completed capture that TIMED OUT (None) must surface the timeout screen.
+
+    Same re-entry mechanics as above but the capture returns None (15s timeout).
+    The re-entry MUST route to listen_timeout (SHOW_PROGRESS_DONE) — not re-arm a
+    fresh capture, which is why the user saw no timeout at all.
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_no_remote_subentry()
+    capture = _GatedCapture(result=None)  # timeout
+    mock_hub_entry.runtime_data.learn_remote_raw_and_wait = capture  # type: ignore[union-attr]
+    mock_hub_entry.runtime_data.is_connected = True  # type: ignore[union-attr]
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+        first = await handler.async_step_listen_first(None)
+        assert first["type"] == FlowResultType.SHOW_PROGRESS
+        capture.gate.set()
+        await _await_task(handler)
+        second = await handler.async_step_listen_first(None)
+
+    assert second["type"] == FlowResultType.SHOW_PROGRESS_DONE, (
+        "timed-out capture re-entry must surface listen_timeout, not re-arm"
+    )
+    assert handler._listen_error_key == "remote_capture_timeout"
+    assert capture.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_listen_second_completed_task_reentry_advances(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """listen_second has the identical re-entry contract (symmetry check).
+
+    A matching second press whose capture task completes must, on the framework
+    re-entry, advance to listen_confirm rather than re-arm a fresh capture.
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_no_remote_subentry()
+    handler._first_capture_id = "AABBCC"
+    capture = _GatedCapture(result="AABBCC")  # matching second press
+    mock_hub_entry.runtime_data.learn_remote_raw_and_wait = capture  # type: ignore[union-attr]
+
+    with patch.object(
+        handler, "_get_reconfigure_subentry", return_value=subentry
+    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+        first = await handler.async_step_listen_second(None)
+        assert first["type"] == FlowResultType.SHOW_PROGRESS
+        second_task = handler._listen_second_task
+        capture.gate.set()
+        assert second_task is not None
+        await second_task
+        second = await handler.async_step_listen_second(None)
+
+    assert second["type"] == FlowResultType.SHOW_PROGRESS_DONE, (
+        "listen_second re-entry of a completed matching press must advance to "
+        "listen_confirm, not re-arm a fresh capture"
+    )
+    assert capture.call_count == 1
+
+
+# ---------------------------------------------------------------------------
 # Timeout / disconnect distinct copy (D-05, REVIEW finding 4)
 # ---------------------------------------------------------------------------
 
