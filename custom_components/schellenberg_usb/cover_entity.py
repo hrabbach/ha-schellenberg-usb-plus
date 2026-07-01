@@ -21,6 +21,9 @@ from .const import (
     CMD_DOWN,
     CMD_MANUAL_DOWN,
     CMD_MANUAL_UP,
+    CMD_REMOTE_DOWN,
+    CMD_REMOTE_STOP,
+    CMD_REMOTE_UP,
     CMD_STOP,
     CMD_UP,
     CONF_BIDIRECTIONAL,
@@ -543,9 +546,15 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
         best-effort (no movement confirmation from the motor) and self-corrects on
         the next full HA-driven open or close (D-05).
 
-        Stop is detected only by an explicit CMD_STOP (00) command — a missed release
-        frame from a jog (41/42) is acceptable; the loop self-caps at 0/100 via the
-        existing boundary check and never requires a timer-based stop (Pitfall P5 / D-03).
+        Stop is detected by an explicit stop command — CMD_STOP (00, stick) or
+        CMD_REMOTE_STOP (83, handheld remote). A missed release frame from a jog
+        (41/42) is acceptable; the loop self-caps at 0/100 via the existing
+        boundary check and never requires a timer-based stop (Pitfall P5 / D-03).
+
+        Handheld-remote codes (82 down / 83 stop / 84 up) are handled with the
+        SAME semantics as the stick tap codes — they were confirmed on hardware
+        (debug/remote-cmd-code-unmapped.md) and are an independent code space,
+        NOT derivable from the stick codes by a bit mask.
         """
         # WR-12-04: a physical remote press is asynchronous to HA's lifecycle.
         # A dispatcher callback that races entity removal could invoke this
@@ -561,7 +570,14 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
         # elapsed and visibly jump (worst on short-calibrated motors). Log at
         # debug when the back-date delta exceeds the dedup window so the jump
         # is traceable; tracking stays best-effort (no behavioral change).
-        if command in (CMD_UP, CMD_MANUAL_UP, CMD_DOWN, CMD_MANUAL_DOWN):
+        if command in (
+            CMD_UP,
+            CMD_MANUAL_UP,
+            CMD_REMOTE_UP,
+            CMD_DOWN,
+            CMD_MANUAL_DOWN,
+            CMD_REMOTE_DOWN,
+        ):
             backdate_delta = time.monotonic() - receive_timestamp
             if backdate_delta > REMOTE_DEDUP_WINDOW:
                 _LOGGER.debug(
@@ -572,10 +588,11 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
                     REMOTE_DEDUP_WINDOW,
                 )
 
-        if command in (CMD_UP, CMD_MANUAL_UP):
-            # CMD_UP (01, tap open) and CMD_MANUAL_UP (41, jog open) both start the
-            # open position loop.  D-01/D-02: 41/42 normalisation happens here in
-            # the cover layer, not in the Phase 11 API bridge.
+        if command in (CMD_UP, CMD_MANUAL_UP, CMD_REMOTE_UP):
+            # CMD_UP (01, stick tap), CMD_MANUAL_UP (41, stick jog) and
+            # CMD_REMOTE_UP (84, handheld) all start the open position loop.
+            # D-01/D-02: 41/42 and the handheld 82/84 normalisation happens here
+            # in the cover layer, not in the Phase 11 API bridge.
             self._attr_is_opening = True
             self._attr_is_closing = False
             self._move_start_time = receive_timestamp  # back-dated (D-06)
@@ -588,7 +605,7 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
             self._move_start_position = self._attr_current_cover_position
             self._start_position_tracking()
 
-        elif command in (CMD_DOWN, CMD_MANUAL_DOWN):
+        elif command in (CMD_DOWN, CMD_MANUAL_DOWN, CMD_REMOTE_DOWN):
             self._attr_is_opening = False
             self._attr_is_closing = True
             self._move_start_time = receive_timestamp  # back-dated (D-06)
@@ -601,8 +618,9 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
             self._move_start_position = self._attr_current_cover_position
             self._start_position_tracking()
 
-        elif command == CMD_STOP:
+        elif command in (CMD_STOP, CMD_REMOTE_STOP):
             # D-04: latch the best-effort calculated position via _update_position().
+            # CMD_STOP (00, stick) and CMD_REMOTE_STOP (83, handheld) both latch.
             self._stop_position_tracking()
             self._update_position()
 
