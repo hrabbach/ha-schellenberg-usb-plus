@@ -125,6 +125,82 @@ async def test_retry_worker_resends_via_send_command(
 
 
 @pytest.mark.asyncio
+async def test_workers_created_as_background_tasks(hass: HomeAssistant) -> None:
+    """connect() must create both infinite-loop workers as BACKGROUND tasks.
+
+    Regression for the bootstrap warning:
+      "Setup timed out for bootstrap waiting on
+       {schellenberg_retry_worker, schellenberg_heartbeat} - moving forward".
+
+    hass.async_create_task registers a task in HA's setup-tracked set, and
+    bootstrap waits for setup-created tasks to COMPLETE before finishing
+    startup. _retry_worker and _heartbeat_worker are infinite loops that never
+    complete, so scheduling them there hangs bootstrap until it times out.
+    They MUST go through hass.async_create_background_task, which is excluded
+    from that wait set. This test fails if either worker is created via the
+    setup-tracked async_create_task path (the pre-fix behavior).
+    """
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+
+    # Spy on both task-creation entry points. Both must return a real
+    # asyncio.Task so connect() can store a valid, cancellable handle.
+    created_background: list[str] = []
+    created_setup: list[str] = []
+    real_bg = hass.async_create_background_task
+    real_setup = hass.async_create_task
+
+    def spy_background(coro, name=None, *args, **kwargs):  # type: ignore[no-untyped-def]
+        created_background.append(name)
+        return real_bg(coro, name, *args, **kwargs)
+
+    def spy_setup(coro, name=None, *args, **kwargs):  # type: ignore[no-untyped-def]
+        created_setup.append(name)
+        return real_setup(coro, name, *args, **kwargs)
+
+    with (
+        patch(
+            "serial_asyncio_fast.create_serial_connection",
+            new_callable=AsyncMock,
+        ) as mock_create,
+        patch.object(
+            hass, "async_create_background_task", side_effect=spy_background
+        ),
+        patch.object(hass, "async_create_task", side_effect=spy_setup),
+        # Let connect() flow past verification/hub-id into the worker-creation
+        # block without needing a live serial exchange.
+        patch.object(
+            api, "verify_device", new=AsyncMock(return_value=True)
+        ),
+        patch.object(
+            api, "get_device_id", new=AsyncMock(return_value="ABCDEF")
+        ),
+    ):
+        mock_transport = MagicMock()
+        mock_transport.is_closing.return_value = False
+        mock_protocol = MagicMock()
+        mock_create.return_value = (mock_transport, mock_protocol)
+        # Device already in listening mode → skip the mode-switch send/sleep.
+        api._device_mode = "listening"
+
+        try:
+            await api.connect()
+
+            # Both workers exist and are background tasks.
+            assert api._retry_worker_task is not None
+            assert api._heartbeat_task is not None
+            # Both worker names went through the background path...
+            assert "schellenberg_retry_worker" in created_background
+            assert "schellenberg_heartbeat" in created_background
+            # ...and NEITHER went through the setup-tracked path that hangs
+            # bootstrap (this is the assertion that was RED before the fix).
+            assert "schellenberg_retry_worker" not in created_setup
+            assert "schellenberg_heartbeat" not in created_setup
+        finally:
+            # Cancel the real infinite-loop tasks so they do not leak.
+            await api.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_disconnect_cancels_worker_drains_queue(
     hass: HomeAssistant, api_with_transport: SchellenbergUsbApi
 ) -> None:

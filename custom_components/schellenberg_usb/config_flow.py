@@ -937,19 +937,21 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         Binding policy (D-07) runs on the first captured id BEFORE opening
         the second listening window (RESEARCH Finding 2 Cases A/B/C/D).
         """
-        # Clear stale task on re-entry (Pitfall F)
-        if (
-            self._listen_first_task is not None
-            and self._listen_first_task.done()
-        ):
-            self._listen_first_task = None
-
+        # A DONE task here means HA's progress-task done-callback re-invoked
+        # this step (data_entry_flow re-runs async_step_listen_first(None) the
+        # instant the task completes). We MUST fall through to read its result
+        # below — do NOT null it here, or the `is None` branch would treat this
+        # re-entry as a fresh entry and re-arm a brand-new capture window,
+        # looping forever and swallowing both the captured press and the 15s
+        # timeout (remote-bind-press-stuck: spinner hangs with no timeout).
+        # Every SHOW_PROGRESS_DONE path already nulls _listen_first_task, so a
+        # fresh retry/menu re-entry always finds None — the only time this is
+        # non-None-and-done is the framework progress-poll re-entry.
         if self._listen_first_task is None:
             # Fresh entry (bind / change / a confirm- or timeout-"Try again"
             # edge that bypasses reconfigure_menu): tear down any leftover
             # second-capture task and clear a stale _first_capture_id so the
-            # new round starts clean (WR-03 / WR-04). Not reached on the
-            # progress-poll re-entry, where the task is still pending.
+            # new round starts clean (WR-03 / WR-04).
             self._reset_capture_round()
             hub_entry = self._get_entry()
             api = hub_entry.runtime_data
@@ -1080,13 +1082,10 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         sleep/timer guard is needed; the dedup + fresh-future boundary is the
         chosen mitigation (REVIEW finding 8).
         """
-        # Clear stale task on re-entry (Pitfall F).
-        if (
-            self._listen_second_task is not None
-            and self._listen_second_task.done()
-        ):
-            self._listen_second_task = None
-
+        # A DONE task here is HA's progress-task done-callback re-entry (see
+        # async_step_listen_first): fall through to read its result below. Do
+        # NOT null it here or the `is None` branch re-arms a fresh capture and
+        # loops forever (remote-bind-press-stuck).
         if self._listen_second_task is None:
             hub_entry = self._get_entry()
             api = hub_entry.runtime_data
