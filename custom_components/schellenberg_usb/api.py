@@ -408,20 +408,26 @@ class SchellenbergUsbApi:
             return
 
         # Handle Schellenberg device messages
-        # Format: ssXXYYYYYYZZZZCCPPRR
+        # Format: ssXXYYYYYYCCNNNNPPRR
         # ss = prefix (2 chars)
         # XX = device enum (2 chars)
         # YYYYYY = device ID (6 chars)
-        # ZZZZ = message incrementor (4 chars, ignored)
-        # CC = command (2 chars)
-        # PP = padding (2 chars, ignored)
-        # RR = signal strength (2 chars, ignored)
+        # CC = command (2 chars) — stick scheme: 00=stop, 01=up, 02=down, 41/42=jog
+        # NNNN = 16-bit rolling message counter (4 chars) — +1 per distinct press,
+        #        stable within a hold burst; used as the dedup incrementor
+        # PP = hold/repeat counter (2 chars, rises during a long press; ignored here)
+        # RR = checksum / signal strength (2 chars, ignored)
+        # NOTE: command is at [10:12], NOT [14:16]. The earlier layout mis-sliced the
+        # counter's low byte as the command (debug/remote-incrementing-cmd-codes.md):
+        # a bound remote's frames decode to the same 00/01/02 codes the stick uses,
+        # so no separate handheld code space exists — the v1.2.3 82/83/84 "codes" were
+        # consecutive values of this rolling counter, not commands.
         if message.startswith("ss") and len(message) >= 18:
             try:
                 device_enum = message[2:4]
                 device_id = message[4:10]
-                incrementor = message[10:14]
-                command = message[14:16]
+                command = message[10:12]
+                incrementor = message[12:16]
                 # Capture frame-decode instant for the remote-event payload.
                 # Uses time.monotonic() so the timestamp shares the same epoch
                 # as PositionTracker.calculate, enabling accurate elapsed-time

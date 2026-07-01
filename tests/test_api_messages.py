@@ -147,8 +147,9 @@ async def test_handle_message_device_event_registered_device(
     with patch(
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
     ) as mock_send:
-        # Format: ssXXYYYYYYZZZZCCPPRR where XX=enum, YYYYYY=device_id, CC=command
-        api._handle_message("ss10ABC123ZZZZ01PP00")
+        # Format: ssXXYYYYYYCCNNNNPPRR where XX=enum, YYYYYY=device_id,
+        # CC=command[10:12], NNNN=rolling counter[12:16]
+        api._handle_message("ss10ABC12301ZZZZPP00")
 
         # Should dispatch event to device
         mock_send.assert_called_once()

@@ -412,9 +412,11 @@ async def test_integration_message_to_cover_handler(hass: HomeAssistant) -> None
             ):
                 await cover.async_added_to_hass()
 
-    # Drive the real _handle_message path and assert the cover handler fires
+    # Drive the real _handle_message path and assert the cover handler fires.
+    # Frame layout: ss + enum[2:4]=10 + id[4:10]=REM001 + command[10:12]=01 (up) +
+    # counter[12:16]=ABCD + hold[16:18]=PP + cksum[18:20]=00.
     with patch.object(cover, "async_write_ha_state"):
-        api._handle_message("ss10REM001ABCD01PP00")
+        api._handle_message("ss10REM00101ABCDPP00")
 
     assert cover._attr_is_opening is True
 
