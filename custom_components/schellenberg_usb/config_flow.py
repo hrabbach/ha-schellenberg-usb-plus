@@ -708,9 +708,13 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
             menu_options = ["calibrate", "change_remote", "remove_remote"]
         else:
             menu_options = ["calibrate", "bind_remote"]
+        # The "reconfigure_menu" title is "Configure {device_name}"; supply the
+        # placeholder or the frontend formatjs renders MISSING_VALUE as the menu
+        # title. subentry.title is the friendly name set at pairing time.
         return self.async_show_menu(
             step_id="reconfigure_menu",
             menu_options=menu_options,
+            description_placeholders={"device_name": subentry.title or ""},
         )
 
     def _reset_capture_round(self) -> None:
@@ -966,10 +970,18 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
             )
 
         if not self._listen_first_task.done():
+            # The "listen_first" progress step description is
+            # "Press any button on the remote you want to bind to
+            # {device_name}. …" — supply the placeholder or the frontend
+            # formatjs renders MISSING_VALUE (same class as reconfigure_menu).
+            subentry = self._get_reconfigure_subentry()
             return self.async_show_progress(
                 step_id="listen_first",
                 progress_action="listen_first",
                 progress_task=self._listen_first_task,
+                description_placeholders={
+                    "device_name": subentry.title or ""
+                },
             )
 
         captured_id: str | None = self._listen_first_task.result()
@@ -1182,8 +1194,10 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
                 Retry   -> async_step_listen_first (re-enter capture).
         """
         subentry = self._get_reconfigure_subentry()
+        # Strings reference {device_name}/{remote_id}; keys must match by exact
+        # name or the frontend formatjs renders MISSING_VALUE.
         ph: dict[str, str] = {
-            "motor_name": subentry.title or "",
+            "device_name": subentry.title or "",
             "remote_id": self._first_capture_id or "",
         }
         if self._is_change_mode:
@@ -1240,7 +1254,7 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         return self.async_show_menu(
             step_id="remove_confirm",
             menu_options=["remove_confirm_apply", "reconfigure_menu"],
-            description_placeholders={"motor_name": subentry.title or ""},
+            description_placeholders={"device_name": subentry.title or ""},
         )
 
     async def async_step_remove_confirm_apply(

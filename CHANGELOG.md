@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   ### Removed       — removed features
 -->
 
+## [1.2.1] - 2026-07-01
+
+### Fixed
+
+- The motor **Configure** menu and the **Bind a remote** listening screen now show the motor's name in their title and prompt, instead of a "Translation [formatjs Error: MISSING_VALUE]" error message.
+
 ## [1.2.0] - 2026-06-30
 
 ### Added
@@ -65,7 +71,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Stick status sensors (connection status, firmware version, mode)
 - HACS-compatible via zip_release delivery
 
-[unreleased]: https://github.com/hrabbach/ha-schellenberg-usb-plus/compare/v1.2.0...HEAD
+[unreleased]: https://github.com/hrabbach/ha-schellenberg-usb-plus/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.2.1
 [1.2.0]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.2.0
 [1.1.0]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.1.0
 [1.0.0]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.0.0

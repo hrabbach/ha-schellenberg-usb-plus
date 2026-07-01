@@ -215,6 +215,13 @@ async def test_reconfigure_menu_no_binding_shows_bind(
     assert "calibrate" in result["menu_options"]
     assert "change_remote" not in result["menu_options"]
     assert "remove_remote" not in result["menu_options"]
+    # Regression (menu-title-formatjs-error): the reconfigure_menu title is
+    # "Configure {device_name}"; the menu MUST supply device_name or the
+    # frontend formatjs renders MISSING_VALUE as the menu title.
+    assert result["description_placeholders"]["device_name"] == "Test Blind", (
+        "reconfigure_menu must pass description_placeholders['device_name'] "
+        "(strings title is 'Configure {device_name}')."
+    )
 
 
 @pytest.mark.asyncio
@@ -238,6 +245,11 @@ async def test_reconfigure_menu_with_binding_shows_change_remove(
     assert "remove_remote" in result["menu_options"]
     assert "calibrate" in result["menu_options"]
     assert "bind_remote" not in result["menu_options"]
+    # Regression (menu-title-formatjs-error): supply device_name for the
+    # "Configure {device_name}" title.
+    assert result["description_placeholders"]["device_name"] == "Test Blind", (
+        "reconfigure_menu must pass description_placeholders['device_name']."
+    )
 
 
 @pytest.mark.asyncio
@@ -330,6 +342,62 @@ async def test_listen_first_captures_id(
     assert result["type"] == FlowResultType.SHOW_PROGRESS_DONE
     # The captured id must be stored
     assert handler._first_capture_id == "AABBCC"
+
+
+@pytest.mark.asyncio
+async def test_listen_first_progress_supplies_device_name(
+    hass: HomeAssistant, mock_hub_entry: ConfigEntry
+) -> None:
+    """listen_first SHOW_PROGRESS result must carry device_name placeholder.
+
+    Regression (menu-title-formatjs-error): the step.listen_first.description is
+    "Press any button on the remote you want to bind to {device_name}. …". The
+    async_show_progress render site MUST supply description_placeholders with
+    device_name, or the frontend formatjs renders MISSING_VALUE on the screen
+    shown immediately after the user clicks "Bind a remote".
+
+    Uses a capture coroutine gated on an asyncio.Event that is never set, so the
+    task stays pending and the step returns SHOW_PROGRESS (not the harness's
+    synchronous SHOW_PROGRESS_DONE) — the only result type that exposes the
+    progress step's description_placeholders.
+    """
+    handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
+    subentry = _make_no_remote_subentry()
+
+    never_done = asyncio.Event()
+
+    async def _pending_capture(timeout: float = 15.0) -> str | None:
+        await never_done.wait()  # never set -> task stays pending
+        return None
+
+    mock_hub_entry.runtime_data.learn_remote_raw_and_wait = _pending_capture  # type: ignore[union-attr]
+
+    try:
+        with patch.object(
+            handler, "_get_reconfigure_subentry", return_value=subentry
+        ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+            result = await handler.async_step_listen_first(None)
+
+        assert result["type"] == FlowResultType.SHOW_PROGRESS, (
+            f"Expected SHOW_PROGRESS while capture pending, got {result['type']!r}"
+        )
+        assert (
+            result["description_placeholders"]["device_name"] == "Test Blind"
+        ), (
+            "listen_first progress step must pass "
+            "description_placeholders['device_name'] (strings description uses "
+            "{device_name})."
+        )
+    finally:
+        # Release the pending task so it doesn't leak into the event loop.
+        never_done.set()
+        task = handler._listen_first_task
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -464,6 +532,13 @@ async def test_double_press_match_reaches_confirm(
     assert result_confirm["type"] == "menu"
     assert "listen_confirm_apply" in result_confirm["menu_options"]
     assert "listen_first" in result_confirm["menu_options"]
+    # Regression (menu-title-formatjs-error): listen_confirm title/description
+    # use {device_name}; the code must pass 'device_name' (not 'motor_name') or
+    # the frontend formatjs renders MISSING_VALUE.
+    assert (
+        result_confirm["description_placeholders"]["device_name"]
+        == "Test Blind"
+    ), "listen_confirm must pass description_placeholders['device_name']."
 
 
 @pytest.mark.asyncio
@@ -858,6 +933,11 @@ async def test_remove_confirm_is_two_option_menu(
     assert result["type"] == "menu"
     assert "remove_confirm_apply" in result["menu_options"]
     assert "reconfigure_menu" in result["menu_options"]
+    # Regression (menu-title-formatjs-error): remove_confirm title/description
+    # use {device_name}; the code must pass 'device_name' (not 'motor_name').
+    assert (
+        result["description_placeholders"]["device_name"] == "Test Blind"
+    ), "remove_confirm must pass description_placeholders['device_name']."
 
 
 @pytest.mark.asyncio
