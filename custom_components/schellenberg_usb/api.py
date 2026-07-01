@@ -264,12 +264,22 @@ class SchellenbergUsbApi:
             )
             self._last_traffic_time = self.hass.loop.time()
 
-            # Start the retry worker and heartbeat tasks
-            self._retry_worker_task = self.hass.async_create_task(
+            # Start the retry worker and heartbeat tasks.
+            # These are infinite-loop workers that never complete on their own.
+            # They MUST be created as BACKGROUND tasks: hass.async_create_task
+            # registers the task in HA's setup-tracked set, and bootstrap waits
+            # for setup-created tasks to COMPLETE before finishing startup —
+            # so long-running loops there cause the
+            # "Setup timed out for bootstrap waiting on {...}" warning.
+            # hass.async_create_background_task is excluded from that wait set
+            # (the config entry is not reachable here — the constructor stores
+            # only hass/port — so we use the hass variant rather than
+            # entry.async_create_background_task).
+            self._retry_worker_task = self.hass.async_create_background_task(
                 self._retry_worker(),
                 name="schellenberg_retry_worker",
             )
-            self._heartbeat_task = self.hass.async_create_task(
+            self._heartbeat_task = self.hass.async_create_background_task(
                 self._heartbeat_worker(),
                 name="schellenberg_heartbeat",
             )
