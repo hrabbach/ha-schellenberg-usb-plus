@@ -35,7 +35,7 @@ async def test_dedup_nine_identical_frames(hass: HomeAssistant) -> None:
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
     ) as mock_send:
         for _ in range(9):
-            api._handle_message("ss10REM001ABCD01PP00")
+            api._handle_message("ss10REM00101ABCDPP00")
         # First frame: 3 dispatches (triple dispatch). Frames 2-9: suppressed.
         assert mock_send.call_count == 3
 
@@ -57,7 +57,7 @@ async def test_motor_frame_repeats_never_deduped(hass: HomeAssistant) -> None:
     ) as mock_send:
         for _ in range(9):
             # Same device_id + same incrementor "ABCD" across all 9 frames
-            api._handle_message("ss10MOT001ABCD01PP00")
+            api._handle_message("ss10MOT00101ABCDPP00")
         # Every motor frame dispatches once on SIGNAL_DEVICE_EVENT_MOT001; none suppressed
         assert mock_send.call_count == 9
 
@@ -77,7 +77,7 @@ async def test_dedup_quiet_period_reset(hass: HomeAssistant) -> None:
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
     ) as mock_send:
         # First frame: triple dispatch (3 calls)
-        api._handle_message("ss10REM001ABCD01PP00")
+        api._handle_message("ss10REM00101ABCDPP00")
         assert mock_send.call_count == 3
 
         # Simulate that the quiet period has elapsed for this dedup key
@@ -85,7 +85,7 @@ async def test_dedup_quiet_period_reset(hass: HomeAssistant) -> None:
         api._dedup_cache[dedup_key] = hass.loop.time() - REMOTE_DEDUP_WINDOW - 0.001
 
         # Same frame again — quiet period expired, counts as a new press
-        api._handle_message("ss10REM001ABCD01PP00")
+        api._handle_message("ss10REM00101ABCDPP00")
         # Second press adds another 3 dispatches
         assert mock_send.call_count == 6
 
@@ -101,11 +101,11 @@ async def test_dedup_per_device_isolation(hass: HomeAssistant) -> None:
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
     ) as mock_send:
         # Frame from device A (first new press: 3 dispatches)
-        api._handle_message("ss10REMA01ABCD01PP00")
+        api._handle_message("ss10REMA0101ABCDPP00")
         assert mock_send.call_count == 3
 
         # Frame from device B with the same incrementor "ABCD" — distinct dedup key
-        api._handle_message("ss11REMB01ABCD01PP00")
+        api._handle_message("ss11REMB0101ABCDPP00")
         # Device B's frame is a new logical event — 3 more dispatches
         assert mock_send.call_count == 6
 
@@ -124,7 +124,7 @@ async def test_remote_triple_dispatch(hass: HomeAssistant) -> None:
     with patch(
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
     ) as mock_send:
-        api._handle_message("ss10REM001ABCD01PP00")
+        api._handle_message("ss10REM00101ABCDPP00")
 
         assert mock_send.call_count == 3
         # Extract positional args from each call: (hass, signal, payload)
@@ -147,7 +147,7 @@ async def test_motor_frame_unaffected(hass: HomeAssistant) -> None:
     with patch(
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
     ) as mock_send:
-        api._handle_message("ss10MOT001ABCD01PP00")
+        api._handle_message("ss10MOT00101ABCDPP00")
 
         assert mock_send.call_count == 1
         assert mock_send.call_args[0][1] == f"{SIGNAL_DEVICE_EVENT}_MOT001"
@@ -173,7 +173,7 @@ async def test_remote_frame_does_not_reach_motor_handle_event(
     with patch(
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
     ) as mock_send:
-        api._handle_message("ss10REM001ABCD01PP00")
+        api._handle_message("ss10REM00101ABCDPP00")
 
         # (a) Exactly 3 dispatches — no fourth/final dispatch
         assert mock_send.call_count == 3
@@ -203,7 +203,7 @@ async def test_learn_remote_resolves_unknown(hass: HomeAssistant) -> None:
     async def feed_frame() -> None:
         await asyncio.sleep(0)
         # UNK001 is NOT in _registered_devices
-        api._handle_message("ss10UNK001ABCD01PP00")
+        api._handle_message("ss10UNK00101ABCDPP00")
 
     hass.async_create_task(feed_frame())
     result = await api.learn_remote_and_wait()
@@ -225,9 +225,9 @@ async def test_learn_remote_ignores_registered(hass: HomeAssistant) -> None:
     async def feed_frames() -> None:
         await asyncio.sleep(0)
         # First: a registered motor frame — must be ignored by the learn gate
-        api._handle_message("ss10MOT001ABCD01PP00")
+        api._handle_message("ss10MOT00101ABCDPP00")
         # Then: an unknown device — should resolve the future
-        api._handle_message("ss10UNK001EFGH01PP00")
+        api._handle_message("ss10UNK00101EFGHPP00")
 
     hass.async_create_task(feed_frames())
     result = await api.learn_remote_and_wait()
@@ -361,7 +361,7 @@ async def test_api_triple_dispatch_when_remote_registered(hass: HomeAssistant) -
     with patch(
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
     ) as mock_send:
-        api._handle_message("ss10REM001EFGH01PP00")
+        api._handle_message("ss10REM00101EFGHPP00")
 
         # Exactly 3 dispatches (triple dispatch, byte-for-byte RMT-07)
         assert mock_send.call_count == 3
@@ -446,7 +446,7 @@ async def test_gate_1_5_resolves_raw_future_on_any_press(
     with patch(
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
     ) as mock_send:
-        api._handle_message("ss10MOT001ABCD01PP00")
+        api._handle_message("ss10MOT00101ABCDPP00")
         await asyncio.sleep(0)
 
     result = await capture_task
@@ -481,7 +481,7 @@ async def test_gate_1_5_does_not_suppress_normal_routing(
     with patch(
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
     ) as mock_send:
-        api._handle_message("ss10REM001ABCD01PP00")
+        api._handle_message("ss10REM00101ABCDPP00")
         await asyncio.sleep(0)
 
     result = await capture_task
@@ -512,7 +512,7 @@ async def test_gate_1_5_burst_tail_does_not_resolve_second_capture(
         api.learn_remote_raw_and_wait(timeout=5.0)
     )
     await asyncio.sleep(0)
-    api._handle_message("ss10REM001ABCD01PP00")
+    api._handle_message("ss10REM00101ABCDPP00")
     assert await first_task == "REM001"
 
     # Second capture (listen_second) opens immediately, as the flow does.
@@ -522,8 +522,8 @@ async def test_gate_1_5_burst_tail_does_not_resolve_second_capture(
     await asyncio.sleep(0)
 
     # Burst tail of the SAME press (same incr=ABCD) must NOT resolve it.
-    api._handle_message("ss10REM001ABCD01PP00")
-    api._handle_message("ss10REM001ABCD01PP00")
+    api._handle_message("ss10REM00101ABCDPP00")
+    api._handle_message("ss10REM00101ABCDPP00")
     await asyncio.sleep(0)
     assert not second_task.done(), (
         "burst-tail frame of the first press falsely resolved the second "
@@ -531,5 +531,5 @@ async def test_gate_1_5_burst_tail_does_not_resolve_second_capture(
     )
 
     # A genuine second press (NEW incrementor) resolves the second capture.
-    api._handle_message("ss10REM001EFGH01PP00")
+    api._handle_message("ss10REM00101EFGHPP00")
     assert await second_task == "REM001"

@@ -45,20 +45,12 @@ CMD_MANUAL_UP = "41"  # 0x41 - Manual Up (as long as button held)
 CMD_MANUAL_DOWN = "42"  # 0x42 - Manual Down (as long as button held)
 CMD_PAIR = "60"  # 0x60 - Pair with device / Change rotation direction
 
-# Handheld-remote transmit command codes (INDEPENDENT of the stick's own
-# 00/01/02 encoding above). A bound physical remote's RF frames carry these
-# codes in the command byte (message[14:16]). Confirmed on hardware from a
-# down->stop->open press sequence (debug/remote-cmd-code-unmapped.md); the
-# direction is proven only by that log's press order, not a protocol spec, so
-# treat as hardware-observed. NOT derivable from the stick codes by a bit mask
-# (down 02->82 sets 0x80, but up 01->84 and stop 00->83 do not follow), so
-# these are a separate constant space. The byte AFTER the command is a
-# hold/repeat counter that rises during a long press (8200,8204,8208,...) with
-# the incrementor held fixed — dedup suppresses those repeats; there is no
-# distinct handheld "hold" code (contrast the stick's 41/42).
-CMD_REMOTE_DOWN = "82"  # 0x82 - handheld remote down/close press
-CMD_REMOTE_STOP = "83"  # 0x83 - handheld remote stop press
-CMD_REMOTE_UP = "84"  # 0x84 - handheld remote up/open press
+# NOTE: There is no separate handheld-remote command space. A bound physical
+# remote's RF frames carry the command at message[10:12] in the SAME stick
+# scheme as above (00=stop, 01=up, 02=down); the earlier v1.2.3 "82/83/84"
+# codes were consecutive values of the rolling message counter at
+# message[12:16] mis-sliced as the command
+# (debug/resolved/remote-incrementing-cmd-codes.md).
 
 CMD_SET_UPPER_ENDPOINT = "61"  # 0x61 - Set upper endpoint
 CMD_SET_LOWER_ENDPOINT = "62"  # 0x62 - Set lower endpoint
@@ -188,10 +180,10 @@ LEARN_REMOTE_CAPTURE_TIMEOUT = 15.0
 
 # Remote button press → HA event type (Phase 13, D-01)
 # Stick-transmit codes: 01=up, 02=down, 00=stop, 41=hold_up, 42=hold_down.
-# Handheld-remote codes (hardware-observed): 84=up, 82=down, 83=stop — mapped
-# to the SAME event types as the stick tap presses (the handheld has no
-# distinct hold code; a hold is the same code repeated with a rising counter
-# byte, already deduped upstream).
+# A bound handheld remote's frames decode to these SAME codes (command at
+# message[10:12]); there is no separate handheld code space (the v1.2.3
+# 82/83/84 mapping was a mis-sliced rolling counter — see
+# debug/resolved/remote-incrementing-cmd-codes.md).
 # NOTE: the event entity does NOT fold 41/42 into up/down.
 # Contrast Phase 12 cover, which normalises them for position tracking.
 REMOTE_EVENT_MAP: dict[str, str] = {
@@ -200,7 +192,4 @@ REMOTE_EVENT_MAP: dict[str, str] = {
     CMD_STOP: "stop",  # "00"
     CMD_MANUAL_UP: "hold_up",  # "41"
     CMD_MANUAL_DOWN: "hold_down",  # "42"
-    CMD_REMOTE_UP: "up",  # "84" - handheld remote up/open
-    CMD_REMOTE_DOWN: "down",  # "82" - handheld remote down/close
-    CMD_REMOTE_STOP: "stop",  # "83" - handheld remote stop
 }

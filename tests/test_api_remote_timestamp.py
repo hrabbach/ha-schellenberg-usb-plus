@@ -32,7 +32,7 @@ async def test_remote_event_carries_receive_timestamp(hass: HomeAssistant) -> No
     with patch(
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
     ) as mock_send:
-        api._handle_message("ss10REM001ABCD01PP00")
+        api._handle_message("ss10REM00101ABCDPP00")
 
         calls = [c[0] for c in mock_send.call_args_list]
         # Find the SIGNAL_REMOTE_EVENT call
@@ -64,7 +64,7 @@ async def test_device_event_payload_unchanged(hass: HomeAssistant) -> None:
     with patch(
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
     ) as mock_send:
-        api._handle_message("ss10REM001ABCD01PP00")
+        api._handle_message("ss10REM00101ABCDPP00")
 
         calls = [c[0] for c in mock_send.call_args_list]
         device_calls = [
@@ -102,7 +102,7 @@ async def test_receive_timestamp_is_monotonic_epoch(hass: HomeAssistant) -> None
         "custom_components.schellenberg_usb.api.time.monotonic",
         return_value=sentinel,
     ):
-        api._handle_message("ss10REM001ABCD01PP00")
+        api._handle_message("ss10REM00101ABCDPP00")
 
         calls = [c[0] for c in mock_send.call_args_list]
         remote_call = next(

@@ -1,15 +1,19 @@
-"""Regression: handheld-remote command codes (82/83/84) drive tracking + events.
+"""Regression: real handheld-remote frames drive cover tracking + events.
 
-Built from the REAL on-hardware frames in the user's debug log
-(remote-cmd-code-unmapped.md, log lines 112-247): a down->stop->open press
-sequence from remote 7C055A bound to motor enum 33. Before the fix these codes
-fell into the "unknown remote command" / "ignoring unknown command" branches and
-did nothing; after the fix they drive the cover position loop and fire the event
-entity with the same semantics as the stick's own 00/01/02 codes.
+Built from the REAL on-hardware frames captured from remote 7C055A bound to
+motor enum 33 (a down->stop->open press sequence). The command byte is at
+frame[10:12] in the stick's own scheme (02=down, 00=stop, 01=up); a bound
+handheld remote has NO separate code space. Before the offset fix the parser
+mis-sliced the rolling message counter's low byte (frame[14:16] = 82/83/84...)
+as the command, so every press fell into the "unknown remote command" /
+"ignoring unknown command" branches and did nothing. After the fix these frames
+decode to 00/01/02 and drive the cover position loop + fire the event entity
+with the same semantics as the stick's own codes. See
+debug/resolved/remote-incrementing-cmd-codes.md.
 
-Frame layout (api.py:421-424): ss + enum[2:4] + id[4:10] + incr[10:14] +
-cmd[14:16] + trailing hold-counter/checksum. e.g. ss337C055A021D8200CD ->
-enum=33, id=7C055A, incr=021D, cmd=82.
+Frame layout (api.py): ss + enum[2:4] + id[4:10] + command[10:12] +
+counter[12:16] + hold-counter[16:18] + checksum[18:20]. e.g.
+ss337C055A021D8200CD -> enum=33, id=7C055A, command=02 (down), counter=1D82.
 """
 
 from __future__ import annotations
@@ -35,12 +39,13 @@ _REMOTE_ID = "7C055A"
 _MOTOR_ID = "MOT001"
 _MOTOR_ENUM = "33"
 
-# First frame of each distinct press (distinct incrementor). The trailing byte
-# after the command is the hold/repeat counter; only the first frame of each
-# press survives dedup, so these are the frames that reach the handlers.
-FRAME_DOWN = "ss337C055A021D8200CD"  # cmd=82, incr=021D  (1st press = DOWN)
-FRAME_STOP = "ss337C055A001D8300D5"  # cmd=83, incr=001D  (2nd press = STOP)
-FRAME_UP = "ss337C055A011D8400D1"  # cmd=84, incr=011D  (3rd press = UP/open)
+# First frame of each distinct press (distinct counter). Only the first frame
+# of each press survives dedup, so these are the frames that reach the handlers.
+# command is at [10:12] (02/00/01); counter is [12:16]; the [14:16] byte the old
+# parser mistook for the command is just the counter's low byte.
+FRAME_DOWN = "ss337C055A021D8200CD"  # command=02 (DOWN), counter=1D82
+FRAME_STOP = "ss337C055A001D8300D5"  # command=00 (STOP), counter=1D83
+FRAME_UP = "ss337C055A011D8400D1"  # command=01 (UP/open), counter=1D84
 
 
 # ---------------------------------------------------------------------------
@@ -66,10 +71,10 @@ def _build_cover(hass: HomeAssistant, api: SchellenbergUsbApi) -> SchellenbergCo
 
 @pytest.mark.asyncio
 async def test_remote_down_frame_starts_close(hass: HomeAssistant) -> None:
-    """FRAME_DOWN (cmd=82) drives the cover into the closing state (RMT-04).
+    """FRAME_DOWN (command=02) drives the cover into the closing state (RMT-04).
 
-    Fails before the fix: 82 hit the "unknown remote command" else branch and
-    left is_closing False.
+    Fails before the fix: the mis-sliced counter byte (82) hit the "unknown
+    remote command" else branch and left is_closing False.
     """
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
     api.register_remote(_REMOTE_ID, _MOTOR_ID, _MOTOR_ENUM)
@@ -95,9 +100,10 @@ async def test_remote_down_frame_starts_close(hass: HomeAssistant) -> None:
 
 @pytest.mark.asyncio
 async def test_remote_up_frame_starts_open(hass: HomeAssistant) -> None:
-    """FRAME_UP (cmd=84) drives the cover into the opening state (RMT-04).
+    """FRAME_UP (command=01) drives the cover into the opening state (RMT-04).
 
-    Fails before the fix: 84 hit the "unknown remote command" else branch.
+    Fails before the fix: the mis-sliced counter byte (84) hit the "unknown
+    remote command" else branch.
     """
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
     api.register_remote(_REMOTE_ID, _MOTOR_ID, _MOTOR_ENUM)
@@ -122,10 +128,10 @@ async def test_remote_up_frame_starts_open(hass: HomeAssistant) -> None:
 
 @pytest.mark.asyncio
 async def test_remote_stop_frame_latches(hass: HomeAssistant) -> None:
-    """FRAME_STOP (cmd=83) latches position and clears movement flags (RMT-05).
+    """FRAME_STOP (command=00) latches position, clears flags (RMT-05).
 
-    Fails before the fix: 83 hit the "unknown remote command" else branch and
-    never stopped tracking or latched.
+    Fails before the fix: the mis-sliced counter byte (83) hit the "unknown
+    remote command" else branch and never stopped tracking or latched.
     """
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
     api.register_remote(_REMOTE_ID, _MOTOR_ID, _MOTOR_ENUM)
@@ -154,7 +160,7 @@ async def test_remote_stop_frame_latches(hass: HomeAssistant) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Event entity firing for handheld codes
+# Event entity firing for decoded handheld presses
 # ---------------------------------------------------------------------------
 
 
@@ -182,18 +188,21 @@ def _make_event_entity(
 @pytest.mark.parametrize(
     ("command", "expected"),
     [
-        ("82", "down"),  # handheld DOWN
-        ("83", "stop"),  # handheld STOP
-        ("84", "up"),  # handheld UP/open
+        ("02", "down"),  # handheld DOWN decodes to stick-scheme 02
+        ("00", "stop"),  # handheld STOP decodes to 00
+        ("01", "up"),  # handheld UP/open decodes to 01
     ],
 )
 def test_handheld_code_fires_event(
     event_api: SchellenbergUsbApi, command: str, expected: str
 ) -> None:
-    """Handheld codes 82/83/84 fire down/stop/up events (fails before fix).
+    """A decoded handheld press (00/01/02) fires the matching event.
 
-    Before the fix REMOTE_EVENT_MAP.get(command) was None for 82/83/84 and the
-    entity logged "ignoring unknown command" and fired nothing.
+    A bound handheld remote's press decodes to the stick scheme at frame
+    [10:12]; the event entity maps 02/00/01 to down/stop/up. Before the offset
+    fix the parser fed the rolling counter's low byte (82/83/84...) here, which
+    REMOTE_EVENT_MAP.get() returned None for -> "ignoring unknown command",
+    firing nothing.
     """
     entity = _make_event_entity(event_api)
     fired: list[str] = []

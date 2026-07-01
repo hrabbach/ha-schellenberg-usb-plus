@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   ### Removed       — removed features
 -->
 
+## [1.2.4] - 2026-07-01
+
+### Fixed
+
+- A bound handheld remote now actually controls the shutter: up/stop/down presses are recognized and drive position tracking and the remote-button event entity. The v1.2.3 fix read the command from the wrong position in the RF frame, so every press still registered as an "unknown" code and was ignored; it is now decoded at the correct offset.
+
 ## [1.2.3] - 2026-07-01
 
 ### Fixed
@@ -84,7 +90,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Stick status sensors (connection status, firmware version, mode)
 - HACS-compatible via zip_release delivery
 
-[unreleased]: https://github.com/hrabbach/ha-schellenberg-usb-plus/compare/v1.2.3...HEAD
+[unreleased]: https://github.com/hrabbach/ha-schellenberg-usb-plus/compare/v1.2.4...HEAD
+[1.2.4]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.2.4
 [1.2.3]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.2.3
 [1.2.2]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.2.2
 [1.2.1]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.2.1
