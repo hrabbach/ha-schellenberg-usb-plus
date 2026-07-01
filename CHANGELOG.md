@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   ### Removed       — removed features
 -->
 
+## [1.2.2] - 2026-07-01
+
+### Fixed
+
+- **Bind a remote** now works: pressing the remote button no longer leaves the listening screen spinning forever. The screen now advances to confirm the captured remote (or shows a timeout if no press is detected).
+- Removed a "Setup timed out for bootstrap" warning that Home Assistant logged at startup for this integration (the retry and heartbeat background workers were being tracked as setup tasks). Startup is now clean.
+
 ## [1.2.1] - 2026-07-01
 
 ### Fixed
@@ -71,7 +78,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Stick status sensors (connection status, firmware version, mode)
 - HACS-compatible via zip_release delivery
 
-[unreleased]: https://github.com/hrabbach/ha-schellenberg-usb-plus/compare/v1.2.1...HEAD
+[unreleased]: https://github.com/hrabbach/ha-schellenberg-usb-plus/compare/v1.2.2...HEAD
+[1.2.2]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.2.2
 [1.2.1]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.2.1
 [1.2.0]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.2.0
 [1.1.0]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.1.0
