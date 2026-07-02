@@ -81,6 +81,15 @@ class SchellenbergUsbApi:
         self.port = port
         self._transport: asyncio.Transport | None = None
         self._protocol: SchellenbergProtocol | None = None
+        # Channel-AGNOSTIC "known hardware id" set consumed by Gate 1 (pairing
+        # guard), Gate 1.5/Gate 4 (known checks) and unknown-device warning
+        # suppression — all of which key on the inbound plain device_id.
+        # Deliberately NOT re-keyed to tuples: inbound frames carry a bare
+        # device_id at parse time; using tuple keys here would break the
+        # `device_id not in _registered_devices` pairing guard and the
+        # unknown-device warning suppression (resolves review finding #3).
+        # Remote entries are removed only when ALL channels of that hardware id
+        # are unbound — see _is_bound_remote_id / unregister_remote.
         self._registered_devices: dict[
             str, str
         ] = {}  # Dict[device_id, device_enum] for registered entities
@@ -121,32 +130,49 @@ class SchellenbergUsbApi:
         # CMD_ALLOW_PAIRING handshake; NEVER reuses _pairing_future.
         self._delegation_future: asyncio.Future[tuple[str, str]] | None = None
 
-        # Remote coexistence (v1.3)
-        # reverse-lookup: remote_device_id → motor_device_id
-        self._remote_to_motor: dict[str, str] = {}
+        # Remote coexistence (v1.3/v1.4)
+        # reverse-lookup: (remote_enum, remote_id) → motor_device_id
+        # Keyed on (remote_enum, remote_id) where remote_enum is the 2-char
+        # channel selector from frame[2:4]. Legacy single-channel binds
+        # persisted before CONF_REMOTE_ENUM existed use the slot (None, remote_id)
+        # — see bound_motor_for / Gate 3 for the wildcard fallback.
+        self._remote_to_motor: dict[tuple[str | None, str], str] = {}
         self._learn_remote_future: asyncio.Future[str] | None = None
         # Phase 15: raw-capture future — resolves on ANY device press regardless of
         # registration status; used by learn_remote_raw_and_wait() (D-07).
-        self._learn_remote_raw_future: asyncio.Future[str] | None = None
+        # Returns (device_enum, device_id) tuple so callers can key on the
+        # channel-distinguishing pair (v1.4 return-type ripple).
+        self._learn_remote_raw_future: asyncio.Future[tuple[str, str]] | None = None
         # Phase 15 CR-01: burst-tail guard for raw learn-capture. A single
         # physical press emits a ~9-frame RF burst that all share ONE
         # incrementor. Without this guard, leftover frames of the first press
         # would resolve the SECOND capture future and falsely satisfy the D-06
-        # double-press safeguard. Records the (device_id, incrementor) and
-        # loop.time() of the frame that last resolved a raw-capture future; a
+        # double-press safeguard. Records the (device_enum, device_id, incrementor)
+        # and loop.time() of the frame that last resolved a raw-capture future; a
         # same-key frame within REMOTE_DEDUP_WINDOW is treated as burst tail and
         # ignored. A genuine second press carries a NEW incrementor and passes.
-        self._learn_remote_raw_last_key: tuple[str, str] | None = None
+        self._learn_remote_raw_last_key: tuple[str, str, str] | None = None
         self._learn_remote_raw_last_time: float = 0.0
-        # Incrementor dedup cache: (device_id, incrementor) → loop.time() of last seen
-        self._dedup_cache: dict[tuple[str, str], float] = {}
-        # TimerHandles for dedup quiet-period resets (keyed by (device_id, incrementor))
-        self._dedup_handles: dict[tuple[str, str], asyncio.TimerHandle] = {}
+        # Incrementor dedup cache: (device_enum, device_id, incrementor) → loop.time() of last seen
+        self._dedup_cache: dict[tuple[str, str, str], float] = {}
+        # TimerHandles for dedup quiet-period resets (keyed by (device_enum, device_id, incrementor))
+        self._dedup_handles: dict[tuple[str, str, str], asyncio.TimerHandle] = {}
         # Ref-count for multi-entity registration safety (Phase 13 D-04):
         # both cover_entity (timed+bound) and event_entity call register_remote
-        # for the same (remote_id, motor_id) pair; unregister_remote only removes
-        # the mapping when the last holder unregisters.
-        self._remote_ref_counts: dict[str, int] = {}
+        # for the same (remote_enum, remote_id, motor_id) tuple; unregister_remote
+        # only removes the mapping when the last holder unregisters.
+        # Keyed on (remote_enum, remote_id) matching _remote_to_motor.
+        self._remote_ref_counts: dict[tuple[str | None, str], int] = {}
+
+    def _is_bound_remote_id(self, device_id: str) -> bool:
+        """Return True if device_id is bound as ANY remote channel.
+
+        Scans _remote_to_motor tuple keys by the id component so that
+        is_registered_motor and unregister_remote can correctly tell apart a
+        plain-id motor from a device_id that is a remote channel — even when
+        the legacy (None, device_id) slot is in use.
+        """
+        return any(rid == device_id for (_enum, rid) in self._remote_to_motor)
 
     def _compute_reconnect_delay(self) -> float:
         """Return next reconnect delay: truncated exponential backoff, equal jitter.
@@ -436,7 +462,10 @@ class SchellenbergUsbApi:
 
                 _LOGGER.debug(
                     "Parsed: enum=%s, id=%s, incr=%s, cmd=%s",
-                    device_enum, device_id, incrementor, command,
+                    device_enum,
+                    device_id,
+                    incrementor,
+                    command,
                 )
 
                 # [GATE 1] — pairing-future: unchanged from existing code
@@ -448,9 +477,7 @@ class SchellenbergUsbApi:
                 # move dedup ahead of it (WR-04).
                 if self._pairing_future and not self._pairing_future.done():
                     if device_id not in self._registered_devices:
-                        _LOGGER.info(
-                            "Pairing successful! New device ID: %s", device_id
-                        )
+                        _LOGGER.info("Pairing successful! New device ID: %s", device_id)
                         self._safe_resolve_future(self._pairing_future, device_id)
                         # Stop pairing mode after a 2 second delay to ensure
                         # device has fully paired
@@ -469,8 +496,8 @@ class SchellenbergUsbApi:
                 # suppressed.)
                 # CRITICAL: no `return` here — all existing gates 2/3/4/final dispatch
                 # continue byte-for-byte unchanged (RMT-07).
-                # CR-01: a frame matching the (device_id, incrementor) that last
-                # resolved a raw capture, within REMOTE_DEDUP_WINDOW, is a burst-tail
+                # CR-01: a frame matching the (device_enum, device_id, incrementor) that
+                # last resolved a raw capture, within REMOTE_DEDUP_WINDOW, is a burst-tail
                 # repeat of the SAME physical press — ignore it so it cannot resolve the
                 # second capture future and defeat the D-06 double-press safeguard. A
                 # real second press carries a new incrementor and is never suppressed.
@@ -478,7 +505,7 @@ class SchellenbergUsbApi:
                     self._learn_remote_raw_future
                     and not self._learn_remote_raw_future.done()
                 ):
-                    raw_key = (device_id, incrementor)
+                    raw_key = (device_enum, device_id, incrementor)
                     raw_now = self.hass.loop.time()
                     if (
                         self._learn_remote_raw_last_key == raw_key
@@ -486,26 +513,37 @@ class SchellenbergUsbApi:
                         < REMOTE_DEDUP_WINDOW
                     ):
                         _LOGGER.debug(
-                            "learn_remote_raw: ignoring burst-tail frame %s"
-                            " incr=%s (same press, %.3fs ago)",
-                            device_id, incrementor,
+                            "learn_remote_raw: ignoring burst-tail frame"
+                            " enum=%s id=%s incr=%s (same press, %.3fs ago)",
+                            device_enum,
+                            device_id,
+                            incrementor,
                             raw_now - self._learn_remote_raw_last_time,
                         )
                     else:
                         _LOGGER.info(
-                            "learn_remote_raw: captured device %s (registered=%s)",
+                            "learn_remote_raw: captured device enum=%s id=%s"
+                            " (registered=%s)",
+                            device_enum,
                             device_id,
                             device_id in self._registered_devices,
                         )
                         self._learn_remote_raw_last_key = raw_key
                         self._learn_remote_raw_last_time = raw_now
                         self._safe_resolve_future(
-                            self._learn_remote_raw_future, device_id
+                            self._learn_remote_raw_future, (device_enum, device_id)
                         )
                     # Do NOT return — existing routing/dedup/dispatch continues unchanged.
 
                 # Compute-once: remote routing discriminator + dedup-scope flags
-                motor_id = self._remote_to_motor.get(device_id)
+                # [GATE 3 lookup] — try (enum, id) first; fall back to legacy
+                # (None, id) slot for pre-v1.4 single-channel binds persisted
+                # without CONF_REMOTE_ENUM (migration mechanism — review #4).
+                motor_id = self._remote_to_motor.get((device_enum, device_id))
+                if motor_id is None:
+                    # Legacy single-channel bind persisted without CONF_REMOTE_ENUM:
+                    # fall back to enum-agnostic slot so pre-v1.4 binds keep routing.
+                    motor_id = self._remote_to_motor.get((None, device_id))
                 is_remote = motor_id is not None
                 is_learning = (
                     self._learn_remote_future is not None
@@ -523,7 +561,7 @@ class SchellenbergUsbApi:
                 # tracking toward an endstop while the shutter has stopped — a
                 # user-visible position divergence. Never gate STOP on dedup.
                 if (is_remote or is_learning) and command != CMD_STOP:
-                    dedup_key = (device_id, incrementor)
+                    dedup_key = (device_enum, device_id, incrementor)
                     now = self.hass.loop.time()
                     cached_time = self._dedup_cache.get(dedup_key)
                     # The dedup window is intentionally anchored to the FIRST
@@ -538,9 +576,12 @@ class SchellenbergUsbApi:
                         and (now - cached_time) < REMOTE_DEDUP_WINDOW
                     ):
                         _LOGGER.debug(
-                            "Dedup: suppressing RF repeat from %s"
+                            "Dedup: suppressing RF repeat from enum=%s id=%s"
                             " incr=%s (%.3fs ago)",
-                            device_id, incrementor, now - cached_time,
+                            device_enum,
+                            device_id,
+                            incrementor,
+                            now - cached_time,
                         )
                         return
                     old_handle = self._dedup_handles.pop(dedup_key, None)
@@ -549,7 +590,7 @@ class SchellenbergUsbApi:
                     self._dedup_cache[dedup_key] = now
 
                     def _reset_dedup_entry(
-                        key: tuple[str, str] = dedup_key,
+                        key: tuple[str, str, str] = dedup_key,
                     ) -> None:
                         self._dedup_cache.pop(key, None)
                         self._dedup_handles.pop(key, None)
@@ -563,7 +604,10 @@ class SchellenbergUsbApi:
                 if motor_id is not None:
                     _LOGGER.debug(
                         "Remote %s → motor %s (enum=%s): bridging cmd=%s",
-                        device_id, motor_id, device_enum, command,
+                        device_id,
+                        motor_id,
+                        device_enum,
+                        command,
                     )
                     async_dispatcher_send(
                         self.hass,
@@ -590,32 +634,35 @@ class SchellenbergUsbApi:
                         and not self._learn_remote_future.done()
                     ):
                         _LOGGER.info(
-                            "learn_remote_and_wait: captured unknown"
-                            " device %s", device_id
+                            "learn_remote_and_wait: captured unknown device %s",
+                            device_id,
                         )
-                        self._safe_resolve_future(
-                            self._learn_remote_future, device_id
-                        )
+                        self._safe_resolve_future(self._learn_remote_future, device_id)
                         return  # suppress warning while in learn window
                     if self._ignore_unknown:
                         # "Ignore unknown signals" hub option on — demote to DEBUG
                         _LOGGER.debug(
-                            "Ignoring signal from unknown device"
-                            " %s (enum=%s, cmd=%s)",
-                            device_id, device_enum, command,
+                            "Ignoring signal from unknown device %s (enum=%s, cmd=%s)",
+                            device_id,
+                            device_enum,
+                            command,
                         )
                     else:
                         _LOGGER.warning(
                             "Received message for device %s (enum=%s, cmd=%s)"
                             " but no corresponding entity found. The device"
                             " may need to be added to Home Assistant",
-                            device_id, device_enum, command,
+                            device_id,
+                            device_enum,
+                            command,
                         )
                 else:
                     # The entity will handle the event via the dispatcher
                     _LOGGER.debug(
                         "Forwarding event to device %s (enum=%s): command=%s",
-                        device_id, device_enum, command,
+                        device_id,
+                        device_enum,
+                        command,
                     )
 
                 # [EXISTING FINAL DISPATCH — unchanged; reached only for registered
@@ -810,14 +857,10 @@ class SchellenbergUsbApi:
         # send_command returns silently on a closing transport, so we MUST
         # poll is_connected ourselves (REVIEWS finding 2).
         if not self.is_connected:
-            raise ConnectionError(
-                "Serial port disconnected before CMD_PAIR"
-            )
+            raise ConnectionError("Serial port disconnected before CMD_PAIR")
 
         # Send CMD_PAIR frame (retry-queue bypassed — track_retry=False).
-        pair_command = (
-            f"{CMD_TRANSMIT}{device_enum}9{CMD_PAIR}0000"
-        )
+        pair_command = f"{CMD_TRANSMIT}{device_enum}9{CMD_PAIR}0000"
         _LOGGER.debug(
             "Delegation handshake CMD_PAIR for enum %s: %s",
             device_enum,
@@ -830,8 +873,7 @@ class SchellenbergUsbApi:
         # a false-success (enum, enum) tuple (REVIEWS finding 2, D-09).
         if not self.is_connected:
             raise ConnectionError(
-                "Serial port disconnected between CMD_PAIR and"
-                " CMD_ALLOW_PAIRING"
+                "Serial port disconnected between CMD_PAIR and CMD_ALLOW_PAIRING"
             )
 
         # Send CMD_ALLOW_PAIRING via the existing framer (additive track_retry
@@ -841,16 +883,12 @@ class SchellenbergUsbApi:
             "Delegation handshake CMD_ALLOW_PAIRING for enum %s",
             device_enum,
         )
-        await self.allow_pairing_on_device(
-            device_enum, track_retry=False
-        )
+        await self.allow_pairing_on_device(device_enum, track_retry=False)
 
         # Final connectivity guard — catches a disconnect arriving after the
         # second frame was queued but before the coroutine returns.
         if not self.is_connected:
-            raise ConnectionError(
-                "Serial port disconnected after CMD_ALLOW_PAIRING"
-            )
+            raise ConnectionError("Serial port disconnected after CMD_ALLOW_PAIRING")
 
     async def delegation_pair(self) -> tuple[str, str]:
         """Drive the delegation-pairing handshake for a silent (timed) motor.
@@ -883,18 +921,14 @@ class SchellenbergUsbApi:
             )
             raise DeviceLimitReached
 
-        _LOGGER.info(
-            "Starting delegation pairing for device enum %s", device_enum
-        )
+        _LOGGER.info("Starting delegation pairing for device enum %s", device_enum)
 
         # Create the dedicated future (lifecycle: created here, cleared in
         # finally, and drained by update_connection_status on disconnect).
         # It is NEVER awaited for an inbound frame (Pitfall 3 — silent motors
         # send none); it exists purely for the in-progress concurrency guard
         # above and for lifecycle/drain symmetry.
-        self._delegation_future = (
-            asyncio.get_running_loop().create_future()
-        )
+        self._delegation_future = asyncio.get_running_loop().create_future()
         # Because nothing awaits this future, a drain that calls
         # set_exception (disconnect via update_connection_status, or
         # abort_delegation_pair) would otherwise be garbage-collected with an
@@ -920,13 +954,10 @@ class SchellenbergUsbApi:
             # Map the wait_for deadline to ConnectionError so the flow's
             # (ConnectionError, OSError) handler covers it uniformly (D-09).
             raise ConnectionError(
-                "Delegation handshake timed out after %s s"
-                % DELEGATION_TIMEOUT
+                "Delegation handshake timed out after %s s" % DELEGATION_TIMEOUT
             ) from err
         else:
-            _LOGGER.info(
-                "Delegation pairing completed for enum %s", device_enum
-            )
+            _LOGGER.info("Delegation pairing completed for enum %s", device_enum)
             # device_id == device_enum: timed motors have no inbound ID frame;
             # using the enum as device_id matches the manual-add subentry shape.
             return (device_enum, device_enum)
@@ -1058,7 +1089,11 @@ class SchellenbergUsbApi:
         )
 
     def register_remote(
-        self, remote_id: str, motor_id: str, motor_enum: str
+        self,
+        remote_id: str,
+        remote_enum: str | None,
+        motor_id: str,
+        motor_enum: str,
     ) -> None:
         """Register a remote-to-motor binding (ref-counted for multi-entity safety).
 
@@ -1075,50 +1110,68 @@ class SchellenbergUsbApi:
         eliminates the collision). _remote_to_motor is the authoritative
         discriminator between remote and motor frames; do NOT rely on
         _registered_devices to tell them apart.
+
+        remote_enum is the 2-char channel selector from frame[2:4]. Pass None
+        for legacy single-channel binds that predate CONF_REMOTE_ENUM — they
+        are stored under the (None, remote_id) slot and the wildcard fallback
+        in Gate 3 / bound_motor_for resolves them correctly.
         """
+        key = (remote_enum, remote_id)
         # Observability only (WR-03): warn when an existing remote→motor
         # binding is overwritten with a DIFFERENT motor, so a misconfig
         # (re-bind, or a double async_added_to_hass) leaves a log trail.
         # This does NOT reject or alter the binding — binding policy is
         # deliberately deferred to Phase 15 (D-07).
-        existing = self._remote_to_motor.get(remote_id)
+        existing = self._remote_to_motor.get(key)
         if existing is not None and existing != motor_id:
             _LOGGER.warning(
                 "Remote %s re-bound from motor %s to %s",
-                remote_id, existing, motor_id,
+                remote_id,
+                existing,
+                motor_id,
             )
         self._registered_devices[remote_id] = motor_enum
-        self._remote_to_motor[remote_id] = motor_id
-        self._remote_ref_counts[remote_id] = (
-            self._remote_ref_counts.get(remote_id, 0) + 1
-        )
+        self._remote_to_motor[key] = motor_id
+        self._remote_ref_counts[key] = self._remote_ref_counts.get(key, 0) + 1
         _LOGGER.debug(
-            "Registered remote %s -> motor %s (enum=%s, ref=%d)",
+            "Registered remote %s (enum=%s) -> motor %s (enum=%s, ref=%d)",
             remote_id,
+            remote_enum,
             motor_id,
             motor_enum,
-            self._remote_ref_counts[remote_id],
+            self._remote_ref_counts[key],
         )
 
-    def unregister_remote(self, remote_id: str) -> None:
+    def unregister_remote(self, remote_id: str, remote_enum: str | None) -> None:
         """Remove a remote binding (ref-counted; only removes when count reaches 0).
 
         Called from cover_entity and event_entity async_on_remove (Phase 12/13).
-        Unregistering an unknown or zero-count remote_id is a safe no-op.
+        Unregistering an unknown or zero-count key is a safe no-op.
+
+        remote_enum must match the value passed to register_remote — i.e. the
+        channel enum from CONF_REMOTE_ENUM (or None for legacy binds).
         """
-        count = self._remote_ref_counts.get(remote_id, 0)
+        key = (remote_enum, remote_id)
+        count = self._remote_ref_counts.get(key, 0)
         if count > 1:
-            self._remote_ref_counts[remote_id] = count - 1
+            self._remote_ref_counts[key] = count - 1
             _LOGGER.debug(
-                "Unregistered remote %s (ref=%d, still active)",
+                "Unregistered remote %s (enum=%s, ref=%d, still active)",
                 remote_id,
+                remote_enum,
                 count - 1,
             )
             return
-        self._registered_devices.pop(remote_id, None)
-        self._remote_to_motor.pop(remote_id, None)
-        self._remote_ref_counts.pop(remote_id, None)
-        _LOGGER.debug("Unregistered remote %s (fully removed)", remote_id)
+        self._remote_to_motor.pop(key, None)
+        self._remote_ref_counts.pop(key, None)
+        # Only remove from _registered_devices when NO other channel of this
+        # hardware id is still bound — a sibling channel of the same physical
+        # remote must keep its known-id status in _registered_devices.
+        if not self._is_bound_remote_id(remote_id):
+            self._registered_devices.pop(remote_id, None)
+        _LOGGER.debug(
+            "Unregistered remote %s (enum=%s, fully removed)", remote_id, remote_enum
+        )
 
     async def learn_remote_and_wait(
         self, timeout: float = LEARN_REMOTE_TIMEOUT
@@ -1138,48 +1191,37 @@ class SchellenbergUsbApi:
 
         self._learn_remote_future = asyncio.get_running_loop().create_future()
         try:
-            return await asyncio.wait_for(
-                self._learn_remote_future, timeout=timeout
-            )
+            return await asyncio.wait_for(self._learn_remote_future, timeout=timeout)
         except TimeoutError:
             _LOGGER.debug("learn_remote_and_wait: timeout after %.1fs", timeout)
             return None
         except ConnectionError:
-            _LOGGER.warning(
-                "learn_remote_and_wait aborted — serial port disconnected"
-            )
+            _LOGGER.warning("learn_remote_and_wait aborted — serial port disconnected")
             return None
         finally:
             self._learn_remote_future = None
 
     async def learn_remote_raw_and_wait(
         self, timeout: float = LEARN_REMOTE_CAPTURE_TIMEOUT
-    ) -> str | None:
-        """Open a raw-capture listening window; return the first device_id seen, or None.
+    ) -> tuple[str, str] | None:
+        """Open a raw-capture listening window; return (device_enum, device_id) or None.
 
         Unlike learn_remote_and_wait(), resolves on ANY device press — enrolled
         motors and already-bound remotes included. All binding policy lives in
-        the caller (Phase 15 flow, D-07). Returns the raw 6-char hex device_id,
-        or None on timeout or disconnect.
+        the caller (Phase 15 flow, D-07). Returns (device_enum, device_id) —
+        the channel-distinguishing pair — or None on timeout or disconnect.
         """
-        if (
-            self._learn_remote_raw_future
-            and not self._learn_remote_raw_future.done()
-        ):
+        if self._learn_remote_raw_future and not self._learn_remote_raw_future.done():
             _LOGGER.warning("learn_remote_raw_and_wait already in progress")
             return None
 
-        self._learn_remote_raw_future = (
-            asyncio.get_running_loop().create_future()
-        )
+        self._learn_remote_raw_future = asyncio.get_running_loop().create_future()
         try:
             return await asyncio.wait_for(
                 self._learn_remote_raw_future, timeout=timeout
             )
         except TimeoutError:
-            _LOGGER.debug(
-                "learn_remote_raw_and_wait: timeout after %.1fs", timeout
-            )
+            _LOGGER.debug("learn_remote_raw_and_wait: timeout after %.1fs", timeout)
             return None
         except ConnectionError:
             _LOGGER.warning(
@@ -1194,19 +1236,62 @@ class SchellenbergUsbApi:
 
         Public accessor for the config-flow binding policy so the flow does not
         reach into the private registration dicts (WR-05).
+
+        The `device_id not in self._remote_to_motor` half of the old check was
+        always True once _remote_to_motor switched to tuple keys (a bare str
+        never equals a tuple key). Replaced with _is_bound_remote_id so the
+        remote-exclusion guard continues to work correctly (cross-AI review HIGH #1).
+        The `device_id in self._registered_devices` membership check MUST remain:
+        without it, an unknown id would return True and break the Case-A motor
+        rejection at config_flow pairing (never collapse to `not _is_bound_remote_id`).
         """
-        return (
-            device_id in self._registered_devices
-            and device_id not in self._remote_to_motor
+        return device_id in self._registered_devices and not self._is_bound_remote_id(
+            device_id
         )
 
-    def bound_motor_for(self, remote_id: str) -> str | None:
-        """Return the motor a remote is bound to, or None if it is unbound.
+    def bound_motor_for(self, remote_enum: str | None, remote_id: str) -> str | None:
+        """Return the motor a remote channel is bound to, or None if unbound.
 
         Public accessor over `_remote_to_motor` for the config-flow binding
-        policy (WR-05).
+        policy (WR-05). Tries (remote_enum, remote_id) first; on miss falls
+        back to the legacy (None, remote_id) slot for pre-v1.4 single-channel
+        binds persisted without CONF_REMOTE_ENUM.
         """
-        return self._remote_to_motor.get(remote_id)
+        motor = self._remote_to_motor.get((remote_enum, remote_id))
+        if motor is None:
+            # Wildcard fallback for legacy binds without a stored enum.
+            motor = self._remote_to_motor.get((None, remote_id))
+        return motor
+
+    def bound_motor_match(
+        self, remote_enum: str | None, remote_id: str
+    ) -> tuple[str | None, str]:
+        """Return (motor_id, match_kind) for a remote channel, or (None, "none").
+
+        Sibling accessor to `bound_motor_for` used by the config-flow Case-B
+        policy (Plan 17-05) to distinguish a genuine exact-channel collision
+        (match_kind == "specific") from a legacy-sibling collision via the
+        (None, id) wildcard fallback (match_kind == "wildcard").
+
+        `bound_motor_for` is retained unchanged for callers that only need the
+        motor id (routing-oriented legacy tests call it and assert a bare motor
+        id).  This accessor is the mechanism that lets Case B allow the
+        v1.3-upgrade sibling bind instead of rejecting it.
+
+        match_kind values:
+          "specific" — the exact (remote_enum, remote_id) key is registered.
+          "wildcard" — the specific key missed; the (None, remote_id) legacy
+                       slot matched (a pre-v1.4 enum-agnostic bind).
+          "none"     — neither key matched; the channel is unbound.
+        """
+        motor = self._remote_to_motor.get((remote_enum, remote_id))
+        if motor is not None:
+            return (motor, "specific")
+        # Wildcard fallback for legacy binds without a stored enum.
+        motor = self._remote_to_motor.get((None, remote_id))
+        if motor is not None:
+            return (motor, "wildcard")
+        return (None, "none")
 
     async def verify_device(self, *, heartbeat_probe: bool = False) -> bool:
         """Verify this is a Schellenberg USB stick by sending !? command.
@@ -1299,9 +1384,7 @@ class SchellenbergUsbApi:
             self._safe_resolve_future(self._verify_future, exception=err)
             self._safe_resolve_future(self._device_id_future, exception=err)
             self._safe_resolve_future(self._learn_remote_future, exception=err)
-            self._safe_resolve_future(
-                self._learn_remote_raw_future, exception=err
-            )
+            self._safe_resolve_future(self._learn_remote_raw_future, exception=err)
             self._safe_resolve_future(self._delegation_future, exception=err)
             # Teardown dedup timers (idempotent — clearing an empty dict is a no-op)
             for handle in self._dedup_handles.values():

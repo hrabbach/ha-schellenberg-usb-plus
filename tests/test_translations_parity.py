@@ -257,6 +257,4 @@ def test_all_phase15_step_keys_present(strings_blind: dict) -> None:  # type: ig
         "remove_confirm",
     }
     missing = required - set(strings_blind["step"].keys())
-    assert not missing, (
-        f"Missing Phase 15 step keys in strings.json: {sorted(missing)}"
-    )
+    assert not missing, f"Missing Phase 15 step keys in strings.json: {sorted(missing)}"

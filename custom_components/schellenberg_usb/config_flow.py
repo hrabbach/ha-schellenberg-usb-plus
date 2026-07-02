@@ -26,6 +26,7 @@ from .const import (
     CONF_DEVICE_ID,
     CONF_INITIAL_POSITION,
     CONF_OPEN_TIME,
+    CONF_REMOTE_ENUM,
     CONF_REMOTE_ID,
     CONF_SERIAL_PORT,
     DOMAIN,
@@ -226,8 +227,12 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         self._pending_device_name: str | None = None
         self._pending_is_bidirectional: bool = False
         # Phase 15: capture state for learn-by-press remote binding (D-03..D-10)
-        self._first_capture_id: str | None = None
+        self._first_capture: tuple[str, str] | None = None
         self._is_change_mode: bool = False
+        # Plan 17-05: carry var set when Case B resolves via wildcard fallback to a
+        # DIFFERENT motor — drives routing to listen_confirm_migrate and supplies the
+        # other_motor_name placeholder.  Reset at every _first_capture reset site.
+        self._sibling_bind_other_name: str | None = None
         self._listen_first_task: asyncio.Task[Any] | None = None
         self._listen_second_task: asyncio.Task[Any] | None = None
         # Error-carry vars so listen_timeout renders the correct one of four
@@ -236,6 +241,15 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         # that was set by the preceding listen_first/listen_second/policy step.
         self._listen_error_key: str | None = None
         self._listen_error_placeholders: dict[str, str] | None = None
+        # Plan 17-05: HA's async_configure re-runs the async_show_progress_done
+        # chain carrying the ORIGINAL user_input (e.g. the {"next_step_id":
+        # "bind_remote"} menu selection). listen_timeout used `user_input is
+        # None` alone to tell "arrived via progress-done → show error form" from
+        # "user clicked Try again → retry"; the carried non-None input was
+        # misread as a retry and spun back into listen_first. This flag is set
+        # at every route into listen_timeout and consumed when the form renders,
+        # so the error form is shown regardless of the carried user_input.
+        self._listen_timeout_pending: bool = False
 
     def _get_calibration_handler(self) -> CalibrationFlowHandler:
         """Return (and lazily create) the calibration flow handler."""
@@ -454,9 +468,7 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         # would raise AttributeError and crash the subentry flow (WR-02).
         # Surface a friendly retry-in-place error instead.
         if api is None:
-            _LOGGER.warning(
-                "Delegation attempted while hub entry not loaded"
-            )
+            _LOGGER.warning("Delegation attempted while hub entry not loaded")
             return self.async_show_form(
                 step_id="delegate_transmit",
                 data_schema=vol.Schema({}),
@@ -514,10 +526,7 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
             )
 
         device_enum = self._pending_device_enum or ""
-        device_name = (
-            user_input.get("device_name")
-            or f"Blind {device_enum}"
-        )
+        device_name = user_input.get("device_name") or f"Blind {device_enum}"
         self._pending_device_name = device_name
         return await self.async_step_delegate_position()
 
@@ -542,12 +551,9 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
                 0, min(100, int(user_input.get("initial_position", 100)))
             )
             device_enum = self._pending_device_enum
-            device_name = (
-                self._pending_device_name or f"Blind {device_enum}"
-            )
+            device_name = self._pending_device_name or f"Blind {device_enum}"
             _LOGGER.info(
-                "Creating delegation subentry for enum %s"
-                " at initial position %d%%",
+                "Creating delegation subentry for enum %s at initial position %d%%",
                 device_enum,
                 initial_position,
             )
@@ -603,9 +609,7 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         # we surface a friendly retry rather than crashing with AttributeError
         # (WR-02, mirrors async_step_delegate_transmit).
         if api is None:
-            _LOGGER.warning(
-                "Pairing attempted while hub entry not loaded"
-            )
+            _LOGGER.warning("Pairing attempted while hub entry not loaded")
             return self.async_show_form(
                 step_id="pair",
                 data_schema=vol.Schema({}),
@@ -722,7 +726,7 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
 
         Called on every FRESH entry into the capture flow — the reconfigure
         menu and a fresh listen_first (bind / change / retry edges) — so a
-        leftover listen task or a stale _first_capture_id from an abandoned
+        leftover listen task or a stale _first_capture from an abandoned
         prior round can never bleed into the next round (WR-03 / WR-04). Does
         NOT touch _is_change_mode or the error carry vars; callers own those.
         """
@@ -734,7 +738,8 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
             if not self._listen_second_task.done():
                 self._listen_second_task.cancel()
             self._listen_second_task = None
-        self._first_capture_id = None
+        self._first_capture = None
+        self._sibling_bind_other_name = None
 
     async def async_step_reconfigure_menu(
         self, user_input: dict[str, Any] | None = None
@@ -790,8 +795,7 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         if not is_bidirectional:
             # CAL-01 / D-01: route timed motor to the event-free timed flow.
             _LOGGER.debug(
-                "Calibrate: routing timed motor %s to"
-                " TimedCalibrationFlowHandler",
+                "Calibrate: routing timed motor %s to TimedCalibrationFlowHandler",
                 device_id,
             )
             handler_tc = self._get_timed_cal_handler()
@@ -910,7 +914,8 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         carry over into a fresh bind (D-03).
         """
         self._is_change_mode = False
-        self._first_capture_id = None
+        self._first_capture = None
+        self._sibling_bind_other_name = None
         return await self.async_step_listen_first(None)
 
     async def async_step_change_remote(
@@ -923,7 +928,8 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         change_confirm step; the single listen_confirm step is reused).
         """
         self._is_change_mode = True
-        self._first_capture_id = None
+        self._first_capture = None
+        self._sibling_bind_other_name = None
         return await self.async_step_listen_first(None)
 
     async def async_step_listen_first(
@@ -950,24 +956,20 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         if self._listen_first_task is None:
             # Fresh entry (bind / change / a confirm- or timeout-"Try again"
             # edge that bypasses reconfigure_menu): tear down any leftover
-            # second-capture task and clear a stale _first_capture_id so the
+            # second-capture task and clear a stale _first_capture so the
             # new round starts clean (WR-03 / WR-04).
             self._reset_capture_round()
             hub_entry = self._get_entry()
             api = hub_entry.runtime_data
             if api is None:
-                _LOGGER.warning(
-                    "Remote bind attempted while hub entry not loaded"
-                )
+                _LOGGER.warning("Remote bind attempted while hub entry not loaded")
                 return self.async_show_form(
                     step_id="listen_timeout",
                     data_schema=vol.Schema({}),
                     errors={"base": "hub_not_loaded"},
                 )
             self._listen_first_task = self.hass.async_create_task(
-                api.learn_remote_raw_and_wait(
-                    LEARN_REMOTE_CAPTURE_TIMEOUT
-                ),
+                api.learn_remote_raw_and_wait(LEARN_REMOTE_CAPTURE_TIMEOUT),
                 "listen_first_task",
             )
 
@@ -981,15 +983,13 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
                 step_id="listen_first",
                 progress_action="listen_first",
                 progress_task=self._listen_first_task,
-                description_placeholders={
-                    "device_name": subentry.title or ""
-                },
+                description_placeholders={"device_name": subentry.title or ""},
             )
 
-        captured_id: str | None = self._listen_first_task.result()
+        captured: tuple[str, str] | None = self._listen_first_task.result()
         self._listen_first_task = None
 
-        if captured_id is None:
+        if captured is None:
             # Timeout or disconnect — determine which for distinct copy (D-05).
             hub_entry = self._get_entry()
             api = hub_entry.runtime_data
@@ -1000,17 +1000,15 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
                 else "remote_capture_timeout"
             )
             self._listen_error_placeholders = None
-            return self.async_show_progress_done(
-                next_step_id="listen_timeout"
-            )
+            return self._route_to_listen_timeout()
 
-        # Binding policy checks on the FIRST captured id (D-07).
+        captured_enum, captured_id = captured
+
+        # Binding policy checks on the FIRST captured (enum, id) (D-07).
         hub_entry = self._get_entry()
         api = hub_entry.runtime_data
         if api is None:
-            _LOGGER.warning(
-                "Remote bind attempted while hub entry not loaded"
-            )
+            _LOGGER.warning("Remote bind attempted while hub entry not loaded")
             return self.async_show_form(
                 step_id="listen_timeout",
                 data_schema=vol.Schema({}),
@@ -1018,19 +1016,22 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
             )
 
         # Case A: captured id is an enrolled motor (not a remote).
+        # Motor ids are channel-agnostic — check id only (no enum needed).
         if api.is_registered_motor(captured_id):
             _LOGGER.warning(
-                "Remote bind rejected: captured id %s is a registered motor",
+                "Remote bind rejected: captured enum=%s id=%s is a registered motor",
+                captured_enum,
                 captured_id,
             )
             self._listen_error_key = "remote_is_motor"
             self._listen_error_placeholders = None
-            return self.async_show_progress_done(
-                next_step_id="listen_timeout"
-            )
+            return self._route_to_listen_timeout()
 
-        # Case B: captured id is already bound to a different motor.
-        other_motor_id = api.bound_motor_for(captured_id)
+        # Case B: captured (enum, id) may be bound to a different motor.
+        # Use bound_motor_match (Plan 17-05) so we can distinguish a genuine
+        # exact-channel collision ("specific") from a v1.3 legacy-sibling
+        # collision ("wildcard") where only the (None, id) slot matched.
+        other_motor_id, match_kind = api.bound_motor_match(captured_enum, captured_id)
         if other_motor_id is not None:
             subentry = self._get_reconfigure_subentry()
             this_motor_id = subentry.data.get("device_id")
@@ -1042,28 +1043,56 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
                     if sub.data.get("device_id") == other_motor_id:
                         other_name = sub.title or other_motor_id
                         break
-                _LOGGER.warning(
-                    "Remote bind rejected: captured id %s is already"
-                    " bound to motor %s",
+                if match_kind == "specific":
+                    # Genuine exact-channel collision: the pressed (enum, id)
+                    # key is already bound to another motor.  Reject.
+                    _LOGGER.warning(
+                        "Remote bind rejected: captured enum=%s id=%s is"
+                        " already bound (specific key) to motor %s",
+                        captured_enum,
+                        captured_id,
+                        other_motor_id,
+                    )
+                    self._listen_error_key = "remote_already_bound"
+                    self._listen_error_placeholders = {"other_motor_name": other_name}
+                    return self._route_to_listen_timeout()
+                # match_kind == "wildcard": the collision came only from the
+                # (None, id) legacy slot — a pre-v1.4 channel-agnostic bind on
+                # the other motor.  This means the user is pressing a channel
+                # whose specific (enum, id) has never been registered; it is a
+                # sibling channel of the other motor's remote (Plan 17-05 fix).
+                #
+                # DOCUMENTED AMBIGUITY: a (None, id) slot is channel-agnostic,
+                # so we cannot prove whether this pressed channel is a genuinely
+                # different channel from the other motor's legacy channel or the
+                # SAME one.  We resolve toward the phase goal and ALLOW: the
+                # other motor keeps its (None, id) slot (Gate 3 wildcard) and
+                # will continue to route any enum except the specific one now
+                # being bound to this motor.  If the user accidentally pressed
+                # the other motor's sole legacy channel, only that one channel
+                # moves — recoverable by re-binding.  Blanket-rejecting (the
+                # pre-fix behaviour) is NOT acceptable: it is the v1.3 upgrade
+                # regression this phase exists to fix. (design_decisions #3)
+                _LOGGER.info(
+                    "Remote bind: wildcard collision enum=%s id=%s"
+                    " from legacy slot on motor %s — allowing sibling bind",
+                    captured_enum,
                     captured_id,
                     other_motor_id,
                 )
-                self._listen_error_key = "remote_already_bound"
-                self._listen_error_placeholders = {
-                    "other_motor_name": other_name
-                }
-                return self.async_show_progress_done(
-                    next_step_id="listen_timeout"
-                )
+                self._sibling_bind_other_name = other_name
+                # Fall through to second-press; sibling flag will route to
+                # listen_confirm_migrate on successful double-press match.
             # Case C: re-press of THIS motor's current remote during change
             # (D-10) — allow through; double-press verify will still confirm.
 
         # Case D (clean unknown) or Case C (re-press own remote): proceed.
         _LOGGER.info(
-            "Remote bind: first press captured id=%s, awaiting second press",
+            "Remote bind: first press captured enum=%s id=%s, awaiting second press",
+            captured_enum,
             captured_id,
         )
-        self._first_capture_id = captured_id
+        self._first_capture = (captured_enum, captured_id)
         return self.async_show_progress_done(next_step_id="listen_second")
 
     async def async_step_listen_second(
@@ -1091,8 +1120,7 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
             api = hub_entry.runtime_data
             if api is None:
                 _LOGGER.warning(
-                    "Remote bind (second press) attempted while hub"
-                    " entry not loaded"
+                    "Remote bind (second press) attempted while hub entry not loaded"
                 )
                 return self.async_show_form(
                     step_id="listen_timeout",
@@ -1100,9 +1128,7 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
                     errors={"base": "hub_not_loaded"},
                 )
             self._listen_second_task = self.hass.async_create_task(
-                api.learn_remote_raw_and_wait(
-                    LEARN_REMOTE_CAPTURE_TIMEOUT
-                ),
+                api.learn_remote_raw_and_wait(LEARN_REMOTE_CAPTURE_TIMEOUT),
                 "listen_second_task",
             )
 
@@ -1113,10 +1139,10 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
                 progress_task=self._listen_second_task,
             )
 
-        captured_id: str | None = self._listen_second_task.result()
+        captured: tuple[str, str] | None = self._listen_second_task.result()
         self._listen_second_task = None
 
-        if captured_id is None:
+        if captured is None:
             # Timeout or disconnect on the second press.
             hub_entry = self._get_entry()
             api = hub_entry.runtime_data
@@ -1127,55 +1153,85 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
                 else "remote_capture_timeout"
             )
             self._listen_error_placeholders = None
-            return self.async_show_progress_done(
-                next_step_id="listen_timeout"
-            )
+            return self._route_to_listen_timeout()
 
-        if captured_id != self._first_capture_id:
-            # Mismatch: different remote pressed (D-06).
+        captured_enum, captured_id = captured
+
+        if (captured_enum, captured_id) != self._first_capture:
+            # Mismatch: different remote or channel pressed (D-06).
+            first_enum = self._first_capture[0] if self._first_capture else None
+            first_id = self._first_capture[1] if self._first_capture else None
             _LOGGER.warning(
-                "Remote bind double-press mismatch: first=%s second=%s",
-                self._first_capture_id,
+                "Remote bind double-press mismatch: first=(enum=%s id=%s)"
+                " second=(enum=%s id=%s)",
+                first_enum,
+                first_id,
+                captured_enum,
                 captured_id,
             )
             self._listen_error_key = "remote_press_mismatch"
             self._listen_error_placeholders = None
-            self._first_capture_id = None
-            return self.async_show_progress_done(
-                next_step_id="listen_timeout"
-            )
+            self._first_capture = None
+            self._sibling_bind_other_name = None
+            return self._route_to_listen_timeout()
 
         # Match — advance to confirm (shared step for bind AND change, D-10).
+        # When the sibling-bind flag is set (Plan 17-05 wildcard Case B), route
+        # to the migration confirm step so the user sees accurate copy.
         _LOGGER.info(
-            "Remote bind: second press matched id=%s, advancing to confirm",
+            "Remote bind: second press matched enum=%s id=%s, advancing to confirm",
+            captured_enum,
             captured_id,
         )
-        return self.async_show_progress_done(next_step_id="listen_confirm")
+        next_step = (
+            "listen_confirm_migrate"
+            if self._sibling_bind_other_name is not None
+            else "listen_confirm"
+        )
+        return self.async_show_progress_done(next_step_id=next_step)
+
+    def _route_to_listen_timeout(self) -> SubentryFlowResult:
+        """Route to the listen_timeout error form (Plan 17-05).
+
+        Sets _listen_timeout_pending so async_step_listen_timeout renders the
+        error form even when HA re-runs the async_show_progress_done chain with a
+        carried non-None user_input (which would otherwise be misread as a "Try
+        again" submit and spin back into listen_first).
+        """
+        self._listen_timeout_pending = True
+        return self.async_show_progress_done(next_step_id="listen_timeout")
 
     async def async_step_listen_timeout(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
         """Retry-in-place form for timeout / disconnect / policy rejection.
 
-        On the user_input-is-None path (HA routing from async_show_progress_done),
-        reads the _listen_error_key carry var set by listen_first/listen_second/
-        policy and renders the correct one of the four error keys (REVIEW finding 4).
-        On submit (user clicked "Try again") clears the carry vars and re-enters
-        listen_first. No binding is written here (D-05).
+        Renders the error form when reached via async_show_progress_done — either
+        because HA passed user_input=None, OR because _listen_timeout_pending was
+        set at the routing site (Plan 17-05: HA re-runs the progress chain with
+        the carried menu user_input, which is non-None; without the flag that was
+        misread as a "Try again" submit and spun back into listen_first). Reads
+        the _listen_error_key carry var set by listen_first/listen_second/policy
+        and renders the correct one of the four error keys (REVIEW finding 4).
+        On a genuine "Try again" submit (user_input non-None, flag already
+        consumed) clears the carry vars and re-enters listen_first. No binding is
+        written here (D-05).
         """
-        if user_input is None:
+        if user_input is None or self._listen_timeout_pending:
+            # Consume the pending flag so a subsequent genuine "Try again" submit
+            # (non-None user_input, flag now False) routes to the retry branch.
+            self._listen_timeout_pending = False
             return self.async_show_form(
                 step_id="listen_timeout",
                 data_schema=vol.Schema({}),
-                errors={
-                    "base": self._listen_error_key or "remote_capture_timeout"
-                },
+                errors={"base": self._listen_error_key or "remote_capture_timeout"},
                 description_placeholders=self._listen_error_placeholders,
             )
         # User submitted "Try again" — clear carry vars and restart.
         self._listen_error_key = None
         self._listen_error_placeholders = None
-        self._first_capture_id = None
+        self._first_capture = None
+        self._sibling_bind_other_name = None
         return await self.async_step_listen_first(None)
 
     async def async_step_listen_confirm(
@@ -1197,14 +1253,42 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         # name or the frontend formatjs renders MISSING_VALUE.
         ph: dict[str, str] = {
             "device_name": subentry.title or "",
-            "remote_id": self._first_capture_id or "",
+            "remote_id": self._first_capture[1] if self._first_capture else "",
         }
         if self._is_change_mode:
-            ph["current_remote_id"] = (
-                subentry.data.get(CONF_REMOTE_ID) or ""
-            )
+            ph["current_remote_id"] = subentry.data.get(CONF_REMOTE_ID) or ""
         return self.async_show_menu(
             step_id="listen_confirm",
+            menu_options=["listen_confirm_apply", "listen_first"],
+            description_placeholders=ph,
+        )
+
+    async def async_step_listen_confirm_migrate(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Sibling-channel confirm step for v1.3 legacy-slot upgrade path (Plan 17-05).
+
+        Shown when Case B found the pressed remote only via the (None, id) wildcard
+        fallback on a DIFFERENT motor — meaning this is a new channel of a remote
+        whose other channel already controls that motor.  Presents the same two
+        menu options as listen_confirm (Confirm → listen_confirm_apply, Retry →
+        listen_first) so the persist path is unchanged.
+
+        The description accurately tells the user: remote {remote_id} was detected
+        twice; its other channel currently controls {other_motor_name}, which keeps
+        working; add this channel to {device_name}?
+
+        ALL three placeholders (device_name, remote_id, other_motor_name) are
+        always supplied to prevent formatjs MISSING_VALUE rendering.
+        """
+        subentry = self._get_reconfigure_subentry()
+        ph: dict[str, str] = {
+            "device_name": subentry.title or "",
+            "remote_id": self._first_capture[1] if self._first_capture else "",
+            "other_motor_name": self._sibling_bind_other_name or "",
+        }
+        return self.async_show_menu(
+            step_id="listen_confirm_migrate",
             menu_options=["listen_confirm_apply", "listen_first"],
             description_placeholders=ph,
         )
@@ -1220,17 +1304,27 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         """
         entry = self._get_entry()
         subentry = self._get_reconfigure_subentry()
+        # WR-02 guard: _first_capture is nullable; guard before unpack so a
+        # rare code path (e.g. direct menu navigation without capturing) aborts
+        # gracefully instead of raising TypeError (Plan 17-05, mirrors the
+        # defensive pattern at lines 1273 and 1194-1198 of this file).
+        if self._first_capture is None:
+            _LOGGER.warning(
+                "listen_confirm_apply reached with no captured remote; aborting"
+            )
+            return self.async_abort(reason="pairing_failed")
+        first_enum, first_id = self._first_capture
         new_data = dict(subentry.data) | {
-            CONF_REMOTE_ID: self._first_capture_id
+            CONF_REMOTE_ID: first_id,
+            CONF_REMOTE_ENUM: first_enum,
         }
         _LOGGER.info(
-            "Remote bind: persisting remote_id=%s for motor %s",
-            self._first_capture_id,
+            "Remote bind: persisting remote_enum=%s remote_id=%s for motor %s",
+            first_enum,
+            first_id,
             subentry.data.get("device_id"),
         )
-        self.hass.config_entries.async_update_subentry(
-            entry, subentry, data=new_data
-        )
+        self.hass.config_entries.async_update_subentry(entry, subentry, data=new_data)
         self.hass.config_entries.async_schedule_reload(entry.entry_id)
         return self.async_abort(reason="reconfigure_successful")
 
@@ -1270,14 +1364,12 @@ class SchellenbergPairingSubentryFlow(ConfigSubentryFlow):
         new_data = {
             k: v
             for k, v in subentry.data.items()
-            if k != CONF_REMOTE_ID
+            if k not in (CONF_REMOTE_ID, CONF_REMOTE_ENUM)
         }
         _LOGGER.info(
             "Remote bind: removing remote_id from motor %s",
             subentry.data.get("device_id"),
         )
-        self.hass.config_entries.async_update_subentry(
-            entry, subentry, data=new_data
-        )
+        self.hass.config_entries.async_update_subentry(entry, subentry, data=new_data)
         self.hass.config_entries.async_schedule_reload(entry.entry_id)
         return self.async_abort(reason="reconfigure_successful")

@@ -34,12 +34,17 @@ def mock_api(hass: HomeAssistant) -> SchellenbergUsbApi:
 
 
 def _make_entity(api: SchellenbergUsbApi) -> SchellenbergRemoteEventEntity:
-    """Construct a test event entity with fixed identifiers."""
+    """Construct a test event entity with fixed identifiers.
+
+    Uses remote_enum=None to model a legacy single-channel bind — register_remote
+    tolerates None via the (None, remote_id) wildcard slot (Plan 01).
+    """
     return SchellenbergRemoteEventEntity(
         api=api,
         device_id="ABC123",
         device_enum="10",
         remote_id="REM001",
+        remote_enum=None,
     )
 
 
@@ -52,7 +57,7 @@ def test_cmd_up_fires_up_event(mock_api: SchellenbergUsbApi) -> None:
     """EVT-01a: _on_remote_event('01', 0.0) fires exactly one 'up' event."""
     entity = _make_entity(mock_api)
     fired: list[str] = []
-    entity._trigger_event = lambda et: fired.append(et)  # type: ignore[method-assign]
+    entity._trigger_event = lambda et: fired.append(et)  # type: ignore[misc, assignment]
     entity.async_write_ha_state = MagicMock()  # type: ignore[method-assign]
     entity._on_remote_event("01", 0.0)
     assert fired == ["up"]
@@ -62,7 +67,7 @@ def test_cmd_down_fires_down_event(mock_api: SchellenbergUsbApi) -> None:
     """EVT-01b: _on_remote_event('02', 0.0) fires exactly one 'down' event."""
     entity = _make_entity(mock_api)
     fired: list[str] = []
-    entity._trigger_event = lambda et: fired.append(et)  # type: ignore[method-assign]
+    entity._trigger_event = lambda et: fired.append(et)  # type: ignore[misc, assignment]
     entity.async_write_ha_state = MagicMock()  # type: ignore[method-assign]
     entity._on_remote_event("02", 0.0)
     assert fired == ["down"]
@@ -72,7 +77,7 @@ def test_cmd_stop_fires_stop_event(mock_api: SchellenbergUsbApi) -> None:
     """EVT-01c: _on_remote_event('00', 0.0) fires exactly one 'stop' event."""
     entity = _make_entity(mock_api)
     fired: list[str] = []
-    entity._trigger_event = lambda et: fired.append(et)  # type: ignore[method-assign]
+    entity._trigger_event = lambda et: fired.append(et)  # type: ignore[misc, assignment]
     entity.async_write_ha_state = MagicMock()  # type: ignore[method-assign]
     entity._on_remote_event("00", 0.0)
     assert fired == ["stop"]
@@ -82,7 +87,7 @@ def test_cmd_hold_up_fires_hold_up_event(mock_api: SchellenbergUsbApi) -> None:
     """EVT-01d: _on_remote_event('41', 0.0) fires 'hold_up' — NOT folded to 'up'."""
     entity = _make_entity(mock_api)
     fired: list[str] = []
-    entity._trigger_event = lambda et: fired.append(et)  # type: ignore[method-assign]
+    entity._trigger_event = lambda et: fired.append(et)  # type: ignore[misc, assignment]
     entity.async_write_ha_state = MagicMock()  # type: ignore[method-assign]
     entity._on_remote_event("41", 0.0)
     assert fired == ["hold_up"]
@@ -93,7 +98,7 @@ def test_cmd_hold_down_fires_hold_down_event(mock_api: SchellenbergUsbApi) -> No
     """EVT-01e: _on_remote_event('42', 0.0) fires 'hold_down' — NOT folded to 'down'."""
     entity = _make_entity(mock_api)
     fired: list[str] = []
-    entity._trigger_event = lambda et: fired.append(et)  # type: ignore[method-assign]
+    entity._trigger_event = lambda et: fired.append(et)  # type: ignore[misc, assignment]
     entity.async_write_ha_state = MagicMock()  # type: ignore[method-assign]
     entity._on_remote_event("42", 0.0)
     assert fired == ["hold_down"]
@@ -109,7 +114,7 @@ def test_unknown_command_fires_nothing(mock_api: SchellenbergUsbApi) -> None:
     """EVT-01 unknown: _on_remote_event('99', 0.0) must fire nothing."""
     entity = _make_entity(mock_api)
     fired: list[str] = []
-    entity._trigger_event = lambda et: fired.append(et)  # type: ignore[method-assign]
+    entity._trigger_event = lambda et: fired.append(et)  # type: ignore[misc, assignment]
     entity.async_write_ha_state = MagicMock()  # type: ignore[method-assign]
     entity._on_remote_event("99", 0.0)
     assert fired == []
@@ -252,25 +257,29 @@ async def test_interleaved_cover_event_lifecycle(
 
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
 
+    # remote_enum=None models a legacy single-channel bind; key=(None, remote_id)
+    # in _remote_to_motor and _remote_ref_counts (Plan 01 tuple-keyed maps).
+    remote_key = (None, remote_id)
+
     # (1) Cover registers (async_added_to_hass on the cover entity)
-    api.register_remote(remote_id, motor_id, motor_enum)
-    assert api._remote_to_motor.get(remote_id) == motor_id
-    assert api._remote_ref_counts.get(remote_id) == 1
+    api.register_remote(remote_id, None, motor_id, motor_enum)
+    assert api._remote_to_motor.get(remote_key) == motor_id
+    assert api._remote_ref_counts.get(remote_key) == 1
 
     # (2) Event entity registers (async_added_to_hass on the event entity)
-    api.register_remote(remote_id, motor_id, motor_enum)
-    assert api._remote_to_motor.get(remote_id) == motor_id
-    assert api._remote_ref_counts.get(remote_id) == 2
+    api.register_remote(remote_id, None, motor_id, motor_enum)
+    assert api._remote_to_motor.get(remote_key) == motor_id
+    assert api._remote_ref_counts.get(remote_key) == 2
 
     # (3) Cover is removed first — mapping must STILL route for the event entity
-    api.unregister_remote(remote_id)
-    assert api._remote_to_motor.get(remote_id) == motor_id, (
+    api.unregister_remote(remote_id, None)
+    assert api._remote_to_motor.get(remote_key) == motor_id, (
         "Mapping removed after first unregister — D-04 ref-count broken"
     )
-    assert api._remote_ref_counts.get(remote_id) == 1
+    assert api._remote_ref_counts.get(remote_key) == 1
 
     # (4) Event entity removed — now fully torn down
-    api.unregister_remote(remote_id)
-    assert api._remote_to_motor.get(remote_id) is None
+    api.unregister_remote(remote_id, None)
+    assert api._remote_to_motor.get(remote_key) is None
     assert api._registered_devices.get(remote_id) is None
-    assert api._remote_ref_counts.get(remote_id) is None
+    assert api._remote_ref_counts.get(remote_key) is None

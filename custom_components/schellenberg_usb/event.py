@@ -9,6 +9,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import (
     CONF_BIDIRECTIONAL,
+    CONF_REMOTE_ENUM,
     CONF_REMOTE_ID,
     CONF_SERIAL_PORT,
     SUBENTRY_TYPE_LED,
@@ -43,12 +44,14 @@ async def async_setup_entry(
         device_id = subentry.data.get("device_id")
         device_enum = subentry.data.get("device_enum")
         remote_id = subentry.data.get(CONF_REMOTE_ID)
+        # Read the channel enum (v1.4 binds only). MUST NOT be added to
+        # GUARD 1 — legacy binds have no enum; gating on it would drop the
+        # event entity for all pre-v1.4 motors (plan prohibition).
+        remote_enum = subentry.data.get(CONF_REMOTE_ENUM)
 
         # GUARD 1 (SC #3): no remote binding → no event entity
         if not device_id or not device_enum or not remote_id:
-            _LOGGER.debug(
-                "event.py: skipping %s — no remote_id binding", device_id
-            )
+            _LOGGER.debug("event.py: skipping %s — no remote_id binding", device_id)
             continue
 
         # GUARD 2 (Option A — bidirectional EXCLUSION; see plan ⚠ decision):
@@ -76,6 +79,7 @@ async def async_setup_entry(
                     device_id=device_id,
                     device_enum=device_enum,
                     remote_id=remote_id,
+                    remote_enum=remote_enum,
                 )
             ],
             config_subentry_id=subentry.subentry_id,

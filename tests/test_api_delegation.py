@@ -211,7 +211,7 @@ async def test_delegation_pair_full_choreography(
             f"allow_pairing_on_device:{device_enum}:track_retry={track_retry}"
         )
 
-    api.led_blink = fake_led_blink  # type: ignore[method-assign]
+    api.led_blink = fake_led_blink  # type: ignore[method-assign, assignment]
     api.send_command = fake_send_command  # type: ignore[method-assign]
     api.allow_pairing_on_device = fake_allow_pairing  # type: ignore[method-assign]
 
@@ -221,13 +221,19 @@ async def test_delegation_pair_full_choreography(
     assert call_order[0] == "led_blink"
     # A CMD_PAIR frame with track_retry=False must appear
     assert any(
-        "track_retry=False" in step and "CMD_PAIR" not in step
-        or "60" in step and "track_retry=False" in step
+        "track_retry=False" in step
+        and "CMD_PAIR" not in step
+        or "60" in step
+        and "track_retry=False" in step
         for step in call_order
     ), f"CMD_PAIR send with track_retry=False not found in {call_order}"
     # allow_pairing_on_device must appear last (after CMD_PAIR)
     allow_idx = next(
-        (i for i, s in enumerate(call_order) if s.startswith("allow_pairing_on_device")),
+        (
+            i
+            for i, s in enumerate(call_order)
+            if s.startswith("allow_pairing_on_device")
+        ),
         None,
     )
     assert allow_idx is not None
@@ -269,15 +275,15 @@ async def test_delegation_pair_both_frames_track_retry_false(
     # CMD_PAIR frame (contains "60" — CMD_PAIR constant)
     pair_calls = [k for k in send_kwargs if "60" in k.get("command", "")]
     assert pair_calls, "No CMD_PAIR send_command call recorded"
-    assert all(
-        k["track_retry"] is False for k in pair_calls
-    ), "CMD_PAIR send must have track_retry=False"
+    assert all(k["track_retry"] is False for k in pair_calls), (
+        "CMD_PAIR send must have track_retry=False"
+    )
 
     # CMD_ALLOW_PAIRING via allow_pairing_on_device
     assert allow_kwargs, "No allow_pairing_on_device call recorded"
-    assert all(
-        k["track_retry"] is False for k in allow_kwargs
-    ), "allow_pairing_on_device must be called with track_retry=False"
+    assert all(k["track_retry"] is False for k in allow_kwargs), (
+        "allow_pairing_on_device must be called with track_retry=False"
+    )
 
 
 @pytest.mark.asyncio
@@ -399,7 +405,7 @@ async def test_delegation_pair_disconnect_between_commands_raises(
         # Simulate disconnect arriving after led_blink completes
         api._is_connected = False
 
-    api.led_blink = fake_led_blink  # type: ignore[method-assign]
+    api.led_blink = fake_led_blink  # type: ignore[method-assign, assignment]
     api.send_command = AsyncMock()  # type: ignore[method-assign]
     api.allow_pairing_on_device = AsyncMock()  # type: ignore[method-assign]
 
@@ -449,9 +455,7 @@ async def test_delegation_pair_timeout_raises(
     api.allow_pairing_on_device = hang  # type: ignore[method-assign]
 
     # Patch the timeout to a tiny value so the test runs fast
-    with patch(
-        "custom_components.schellenberg_usb.api.DELEGATION_TIMEOUT", 0.05
-    ):
+    with patch("custom_components.schellenberg_usb.api.DELEGATION_TIMEOUT", 0.05):
         with pytest.raises((TimeoutError, ConnectionError)):
             await api.delegation_pair()
 

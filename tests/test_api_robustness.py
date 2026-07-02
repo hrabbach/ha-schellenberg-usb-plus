@@ -119,8 +119,8 @@ async def test_retry_worker_resends_via_send_command(
         pass
 
     # transport.write must have been called with the re-sent command
-    api._transport.write.assert_called()
-    written = b"".join(call.args[0] for call in api._transport.write.call_args_list)
+    api._transport.write.assert_called()  # type: ignore[union-attr]
+    written = b"".join(call.args[0] for call in api._transport.write.call_args_list)  # type: ignore[union-attr]
     assert b"cmd_queued" in written
 
 
@@ -162,18 +162,12 @@ async def test_workers_created_as_background_tasks(hass: HomeAssistant) -> None:
             "serial_asyncio_fast.create_serial_connection",
             new_callable=AsyncMock,
         ) as mock_create,
-        patch.object(
-            hass, "async_create_background_task", side_effect=spy_background
-        ),
+        patch.object(hass, "async_create_background_task", side_effect=spy_background),
         patch.object(hass, "async_create_task", side_effect=spy_setup),
         # Let connect() flow past verification/hub-id into the worker-creation
         # block without needing a live serial exchange.
-        patch.object(
-            api, "verify_device", new=AsyncMock(return_value=True)
-        ),
-        patch.object(
-            api, "get_device_id", new=AsyncMock(return_value="ABCDEF")
-        ),
+        patch.object(api, "verify_device", new=AsyncMock(return_value=True)),
+        patch.object(api, "get_device_id", new=AsyncMock(return_value="ABCDEF")),
     ):
         mock_transport = MagicMock()
         mock_transport.is_closing.return_value = False
@@ -610,11 +604,7 @@ async def test_disconnect_cancels_pending_reconnect(
             new=AsyncMock(),
         ) as mock_create:
             await api.connect()
-            (
-                mock_create.assert_not_called(),
-                (
-                    "connect() must be a no-op after disconnect() sets _closed=True (CR-01)"
-                ),
-            )
+            # connect() must be a no-op after disconnect() sets _closed=True (CR-01)
+            mock_create.assert_not_called()
     finally:
         hass.loop.call_later = real_call_later  # type: ignore[method-assign]
