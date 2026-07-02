@@ -173,6 +173,14 @@
             "listen_first": "Réessayer"
           }
         },
+        "listen_confirm_migrate": {
+          "title": "Ajouter un canal à {device_name} ?",
+          "description": "La télécommande **{remote_id}** a été détectée deux fois. Son autre canal contrôle actuellement **{other_motor_name}**, qui continuera à fonctionner. Ajouter ce canal à {device_name} ?",
+          "menu_options": {
+            "listen_confirm_apply": "Ajouter le canal",
+            "listen_first": "Réessayer"
+          }
+        },
         "remove_confirm": {
           "title": "Supprimer la télécommande de {device_name} ?",
           "description": "Cela supprimera l'association de télécommande de {device_name}. L'entité d'événement de télécommande disparaîtra et le suivi de position déclenché par cette télécommande s'arrêtera.",
@@ -195,7 +203,7 @@
         "timed_cal_too_short": "Le parcours était trop court (moins de 2 secondes) -- probablement une double pression ou un déclenchement accidentel. Ramenez le volet en position complètement ouverte avec votre télécommande, puis réessayez.",
         "timed_cal_too_long": "Le parcours a dépassé 120 secondes -- le volet est peut-être encore en mouvement. Ramenez le volet en position complètement ouverte avec votre télécommande, puis réessayez dans les 2 minutes.",
         "remote_is_motor": "Ce bouton est enregistré pour un moteur, pas pour une télécommande — choisissez un autre bouton.",
-        "remote_already_bound": "Cette télécommande est déjà associée à {other_motor_name} — dissociez-la d'abord.",
+        "remote_already_bound": "Ce bouton de télécommande est déjà associé à {other_motor_name} — dissociez-le d'abord, puis réessayez.",
         "remote_press_mismatch": "Les deux pressions ne correspondent pas — veuillez réessayer.",
         "remote_capture_timeout": "Aucune télécommande détectée — appuyez sur un bouton dans la fenêtre d'écoute.",
         "remote_capture_disconnected": "La clé USB s'est déconnectée — reconnectez-la et réessayez.",

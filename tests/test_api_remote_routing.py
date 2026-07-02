@@ -29,7 +29,7 @@ async def test_dedup_nine_identical_frames(hass: HomeAssistant) -> None:
     because they share the same (device_id, incrementor) within REMOTE_DEDUP_WINDOW.
     """
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
-    api.register_remote("REM001", "MOT001", "10")
+    api.register_remote("REM001", "10", "MOT001", "10")
 
     with patch(
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
@@ -71,7 +71,7 @@ async def test_dedup_quiet_period_reset(hass: HomeAssistant) -> None:
     monotonic-clock flake — see MEMORY.md monotonic-clock-ci-flake).
     """
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
-    api.register_remote("REM001", "MOT001", "10")
+    api.register_remote("REM001", "10", "MOT001", "10")
 
     with patch(
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
@@ -81,7 +81,7 @@ async def test_dedup_quiet_period_reset(hass: HomeAssistant) -> None:
         assert mock_send.call_count == 3
 
         # Simulate that the quiet period has elapsed for this dedup key
-        dedup_key = ("REM001", "ABCD")
+        dedup_key = ("10", "REM001", "ABCD")
         api._dedup_cache[dedup_key] = hass.loop.time() - REMOTE_DEDUP_WINDOW - 0.001
 
         # Same frame again — quiet period expired, counts as a new press
@@ -94,8 +94,8 @@ async def test_dedup_quiet_period_reset(hass: HomeAssistant) -> None:
 async def test_dedup_per_device_isolation(hass: HomeAssistant) -> None:
     """A frame from device A does not suppress a same-incrementor frame from device B."""
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
-    api.register_remote("REMA01", "MOTA01", "10")
-    api.register_remote("REMB01", "MOTB01", "11")
+    api.register_remote("REMA01", "10", "MOTA01", "10")
+    api.register_remote("REMB01", "11", "MOTB01", "11")
 
     with patch(
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
@@ -119,7 +119,7 @@ async def test_dedup_per_device_isolation(hass: HomeAssistant) -> None:
 async def test_remote_triple_dispatch(hass: HomeAssistant) -> None:
     """A registered remote's frame triggers exactly 3 dispatches with the raw command byte."""
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
-    api.register_remote("REM001", "MOT001", "10")
+    api.register_remote("REM001", "10", "MOT001", "10")
 
     with patch(
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
@@ -168,7 +168,7 @@ async def test_remote_frame_does_not_reach_motor_handle_event(
     # Register MOTOR as an entity (bidirectional motor)
     api.register_entity("MOT001", "10")
     # Register a SEPARATE remote bound to that motor
-    api.register_remote("REM001", "MOT001", "10")
+    api.register_remote("REM001", "10", "MOT001", "10")
 
     with patch(
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
@@ -260,17 +260,17 @@ async def test_register_unregister_remote(hass: HomeAssistant) -> None:
     """register_remote populates both dicts; unregister_remote pops both."""
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
 
-    api.register_remote("REM001", "MOT001", "10")
+    api.register_remote("REM001", "10", "MOT001", "10")
 
     assert "REM001" in api._registered_devices
     assert api._registered_devices["REM001"] == "10"
-    assert "REM001" in api._remote_to_motor
-    assert api._remote_to_motor["REM001"] == "MOT001"
+    assert ("10", "REM001") in api._remote_to_motor
+    assert api._remote_to_motor[("10", "REM001")] == "MOT001"
 
-    api.unregister_remote("REM001")
+    api.unregister_remote("REM001", "10")
 
     assert "REM001" not in api._registered_devices
-    assert "REM001" not in api._remote_to_motor
+    assert ("10", "REM001") not in api._remote_to_motor
 
 
 @pytest.mark.asyncio
@@ -293,7 +293,7 @@ async def test_disconnect_clears_dedup_state(hass: HomeAssistant) -> None:
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
 
     # Populate dedup cache and handles with a real call_later handle
-    dedup_key = ("REM001", "ABCD")
+    dedup_key = ("10", "REM001", "ABCD")
     api._dedup_cache[dedup_key] = hass.loop.time()
     handle = hass.loop.call_later(10.0, lambda: None)
     api._dedup_handles[dedup_key] = handle
@@ -321,11 +321,11 @@ async def test_register_remote_ref_count(hass: HomeAssistant) -> None:
     still be present so the still-live entity continues to route correctly.
     """
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
-    api.register_remote("REM001", "MOT001", "10")
-    api.register_remote("REM001", "MOT001", "10")
-    api.unregister_remote("REM001")
+    api.register_remote("REM001", "10", "MOT001", "10")
+    api.register_remote("REM001", "10", "MOT001", "10")
+    api.unregister_remote("REM001", "10")
     # Mapping still present after first unregister (ref=1 remains)
-    assert api._remote_to_motor.get("REM001") == "MOT001"
+    assert api._remote_to_motor.get(("10", "REM001")) == "MOT001"
 
 
 @pytest.mark.asyncio
@@ -336,13 +336,13 @@ async def test_unregister_remote_ref_count_full(hass: HomeAssistant) -> None:
     stale entries that could accumulate across a reload.
     """
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
-    api.register_remote("REM001", "MOT001", "10")
-    api.register_remote("REM001", "MOT001", "10")
-    api.unregister_remote("REM001")
-    api.unregister_remote("REM001")
-    assert api._remote_to_motor.get("REM001") is None
+    api.register_remote("REM001", "10", "MOT001", "10")
+    api.register_remote("REM001", "10", "MOT001", "10")
+    api.unregister_remote("REM001", "10")
+    api.unregister_remote("REM001", "10")
+    assert api._remote_to_motor.get(("10", "REM001")) is None
     assert api._registered_devices.get("REM001") is None
-    assert api._remote_ref_counts.get("REM001") is None
+    assert api._remote_ref_counts.get(("10", "REM001")) is None
 
 
 @pytest.mark.asyncio
@@ -356,7 +356,7 @@ async def test_api_triple_dispatch_when_remote_registered(hass: HomeAssistant) -
     A single fresh frame produces exactly 3 dispatches: the triple dispatch.
     """
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
-    api.register_remote("REM001", "MOT001", "10")
+    api.register_remote("REM001", "10", "MOT001", "10")
 
     with patch(
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
@@ -394,26 +394,26 @@ async def test_register_remote_rebind_drift_documented(
     with caplog.at_level(
         logging.WARNING, logger="custom_components.schellenberg_usb.api"
     ):
-        # First registration: remote → motorA
-        api.register_remote("REM001", "MOTA01", "10")
-        # Re-bind to a DIFFERENT motor (triggers WR-03 warning on second call)
-        api.register_remote("REM001", "MOTB01", "11")
+        # First registration: channel 10 of remote → motorA
+        api.register_remote("REM001", "10", "MOTA01", "10")
+        # Re-bind SAME channel to a DIFFERENT motor (triggers WR-03 warning)
+        api.register_remote("REM001", "10", "MOTB01", "11")
 
-    # (a) Mapping is overwritten to the new motor
-    assert api._remote_to_motor["REM001"] == "MOTB01"
+    # (a) Mapping is overwritten to the new motor (same channel key)
+    assert api._remote_to_motor[("10", "REM001")] == "MOTB01"
     # (b) Count is incremented (not reset) — drift is accepted, not guarded
-    assert api._remote_ref_counts["REM001"] == 2
+    assert api._remote_ref_counts[("10", "REM001")] == 2
     # (c) WR-03 re-bind warning was logged
     assert any("re-bound from" in record.message for record in caplog.records)
 
     # Simulate Phase 15 reload teardown: both entities unregister
-    api.unregister_remote("REM001")
-    api.unregister_remote("REM001")
+    api.unregister_remote("REM001", "10")
+    api.unregister_remote("REM001", "10")
 
     # All three dicts clean — drift cannot accumulate across a full teardown
-    assert api._remote_to_motor.get("REM001") is None
+    assert api._remote_to_motor.get(("10", "REM001")) is None
     assert api._registered_devices.get("REM001") is None
-    assert api._remote_ref_counts.get("REM001") is None
+    assert api._remote_ref_counts.get(("10", "REM001")) is None
 
 
 # ---------------------------------------------------------------------------
@@ -438,9 +438,7 @@ async def test_gate_1_5_resolves_raw_future_on_any_press(
     api.register_entity("MOT001", "10")  # registered motor
 
     # Start a raw capture
-    capture_task = asyncio.create_task(
-        api.learn_remote_raw_and_wait(timeout=5.0)
-    )
+    capture_task = asyncio.create_task(api.learn_remote_raw_and_wait(timeout=5.0))
     await asyncio.sleep(0)  # let the future be created
 
     with patch(
@@ -451,8 +449,8 @@ async def test_gate_1_5_resolves_raw_future_on_any_press(
 
     result = await capture_task
 
-    # (a) Raw capture resolved with the registered motor's id
-    assert result == "MOT001"
+    # (a) Raw capture resolved with the registered motor's (enum, id) tuple
+    assert result == ("10", "MOT001")
 
     # (b) Motor frame still fired its final SIGNAL_DEVICE_EVENT_MOT001 dispatch
     signals = [c[0][1] for c in mock_send.call_args_list]
@@ -470,12 +468,10 @@ async def test_gate_1_5_does_not_suppress_normal_routing(
     GATE 1.5 did not return/suppress on the REMOTE path.
     """
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
-    api.register_remote("REM001", "MOT001", "10")
+    api.register_remote("REM001", "10", "MOT001", "10")
 
     # Start a raw future (Gate 1.5 will fire)
-    capture_task = asyncio.create_task(
-        api.learn_remote_raw_and_wait(timeout=5.0)
-    )
+    capture_task = asyncio.create_task(api.learn_remote_raw_and_wait(timeout=5.0))
     await asyncio.sleep(0)
 
     with patch(
@@ -486,8 +482,8 @@ async def test_gate_1_5_does_not_suppress_normal_routing(
 
     result = await capture_task
 
-    # Raw capture resolved with the remote's id
-    assert result == "REM001"
+    # Raw capture resolved with the remote's (enum, id) tuple
+    assert result == ("10", "REM001")
     # Triple dispatch must still have fired (Gate 3 was not suppressed by Gate 1.5)
     assert mock_send.call_count == 3
 
@@ -508,17 +504,13 @@ async def test_gate_1_5_burst_tail_does_not_resolve_second_capture(
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
 
     # First capture (listen_first): burst frame 1 (incr=ABCD) resolves it.
-    first_task = asyncio.create_task(
-        api.learn_remote_raw_and_wait(timeout=5.0)
-    )
+    first_task = asyncio.create_task(api.learn_remote_raw_and_wait(timeout=5.0))
     await asyncio.sleep(0)
     api._handle_message("ss10REM00101ABCDPP00")
-    assert await first_task == "REM001"
+    assert await first_task == ("10", "REM001")
 
     # Second capture (listen_second) opens immediately, as the flow does.
-    second_task = asyncio.create_task(
-        api.learn_remote_raw_and_wait(timeout=5.0)
-    )
+    second_task = asyncio.create_task(api.learn_remote_raw_and_wait(timeout=5.0))
     await asyncio.sleep(0)
 
     # Burst tail of the SAME press (same incr=ABCD) must NOT resolve it.
@@ -532,4 +524,38 @@ async def test_gate_1_5_burst_tail_does_not_resolve_second_capture(
 
     # A genuine second press (NEW incrementor) resolves the second capture.
     api._handle_message("ss10REM00101EFGHPP00")
-    assert await second_task == "REM001"
+    assert await second_task == ("10", "REM001")
+
+
+# ---------------------------------------------------------------------------
+# Legacy remote_enum=None: wildcard fallback (migration — pre-v1.4 binds)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_legacy_none_enum_remote_still_routes(hass: HomeAssistant) -> None:
+    """A pre-v1.4 bind stored under (None, remote_id) still routes frames.
+
+    Exercises the Gate 3 wildcard fallback: when a subentry was persisted
+    before CONF_REMOTE_ENUM existed, register_remote is called with
+    remote_enum=None. A frame from that remote (carrying any channel enum)
+    must still trigger the triple dispatch via the (None, id) slot.
+    This seeds the Plan 04 legacy-fallback regression story at the api level.
+    """
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    # Legacy registration — no channel enum (pre-v1.4 subentry)
+    api.register_remote("REM001", None, "MOT001", "10")
+
+    with patch(
+        "custom_components.schellenberg_usb.api.async_dispatcher_send"
+    ) as mock_send:
+        # Frame arrives with enum=10; the (None, "REM001") slot must match
+        api._handle_message("ss10REM00101ABCDPP00")
+
+        # Triple dispatch still fires via the legacy fallback slot
+        assert mock_send.call_count == 3
+        calls = [c[0] for c in mock_send.call_args_list]
+        signals = [c[1] for c in calls]
+        assert f"{SIGNAL_DEVICE_EVENT}_REM001" in signals
+        assert f"{SIGNAL_DEVICE_EVENT}_MOT001" in signals
+        assert f"{SIGNAL_REMOTE_EVENT}_MOT001" in signals

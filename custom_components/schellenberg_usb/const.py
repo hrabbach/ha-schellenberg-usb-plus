@@ -168,6 +168,10 @@ RECONNECT_BACKOFF_CAP = 300  # seconds — D-09 (~5 minutes max)
 # Remote coexistence (v1.3)
 # str | None; 6-char hex device id of the bound remote (subentry data key)
 CONF_REMOTE_ID = "remote_id"
+# str | None; 2-char hex channel enum of the bound remote (subentry data key).
+# Absent on legacy single-channel binds persisted before this field existed —
+# consumers MUST tolerate None (wildcard fallback), not require it.
+CONF_REMOTE_ENUM = "remote_enum"
 
 # seconds — quiet period for incrementor dedup (D-01/D-02)
 REMOTE_DEDUP_WINDOW = 1.0

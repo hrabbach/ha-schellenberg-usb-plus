@@ -13,6 +13,7 @@ from homeassistant.core import HomeAssistant
 from custom_components.schellenberg_usb.api import SchellenbergUsbApi
 from custom_components.schellenberg_usb.const import (
     CONF_BIDIRECTIONAL,
+    CONF_REMOTE_ENUM,
     CONF_REMOTE_ID,
     CONF_SERIAL_PORT,
     DOMAIN,
@@ -46,8 +47,13 @@ def _make_subentry(
     device_enum: str | None = "10",
     remote_id: str | None = "REM001",
     bidirectional: bool | None = None,
+    remote_enum: str | None = None,
 ) -> MagicMock:
-    """Construct a test subentry with specified properties."""
+    """Construct a test subentry with specified properties.
+
+    remote_enum defaults to None (absent), modelling a legacy single-channel
+    bind.  Pass a 2-char hex string (e.g. "10") for a v1.4 multi-channel bind.
+    """
     data: dict[str, Any] = {}
     if device_id is not None:
         data["device_id"] = device_id
@@ -57,6 +63,8 @@ def _make_subentry(
         data[CONF_REMOTE_ID] = remote_id
     if bidirectional is not None:
         data[CONF_BIDIRECTIONAL] = bidirectional
+    if remote_enum is not None:
+        data[CONF_REMOTE_ENUM] = remote_enum
 
     subentry = MagicMock()
     subentry.subentry_id = subentry_id
@@ -127,6 +135,10 @@ async def test_timed_bound_motor_creates_event_entity(
     assert entity._device_id == "ABC123"
     assert entity._device_enum == "10"
     assert entity._remote_id == "REM001"
+    # LEGACY bind: no CONF_REMOTE_ENUM in subentry → remote_enum=None forwarded.
+    # Verifies that a CONF_REMOTE_ENUM-absent subentry registers with remote_enum=None
+    # and does NOT gate GUARD 1 (plan acceptance criterion).
+    assert entity._remote_enum is None
     # Assert config_subentry_id was passed (groups entity under motor device)
     config_subentry_id = mock_add_entities.call_args[1]["config_subentry_id"]
     assert config_subentry_id == "sub-001"
@@ -371,6 +383,7 @@ async def test_mixed_subentries_filtered_correctly(
     entity = entities[0]
     assert entity._device_id == "MOTOR1"
     assert entity._remote_id == "REM001"
+    assert entity._remote_enum is None  # subentry has no CONF_REMOTE_ENUM → legacy
     config_subentry_id = mock_add_entities.call_args[1]["config_subentry_id"]
     assert config_subentry_id == "sub-001"
 

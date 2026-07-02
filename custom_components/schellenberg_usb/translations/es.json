@@ -173,6 +173,14 @@
             "listen_first": "Intentar de nuevo"
           }
         },
+        "listen_confirm_migrate": {
+          "title": "¿Añadir canal a {device_name}?",
+          "description": "El mando **{remote_id}** fue detectado dos veces. Su otro canal controla actualmente **{other_motor_name}**, que seguirá funcionando. ¿Añadir este canal a {device_name}?",
+          "menu_options": {
+            "listen_confirm_apply": "Añadir canal",
+            "listen_first": "Intentar de nuevo"
+          }
+        },
         "remove_confirm": {
           "title": "¿Eliminar mando de {device_name}?",
           "description": "Esto eliminará la vinculación del mando de {device_name}. La entidad de evento del mando desaparecerá y el seguimiento de posición activado por ese mando se detendrá.",
@@ -195,7 +203,7 @@
         "timed_cal_too_short": "El recorrido fue demasiado corto (menos de 2 segundos) -- probablemente una doble pulsación o un disparo accidental. Devuelva la persiana a la posición completamente abierta con su mando e inténtelo de nuevo.",
         "timed_cal_too_long": "El recorrido superó los 120 segundos -- es posible que la persiana siga en movimiento. Devuelva la persiana a la posición completamente abierta con su mando e inténtelo de nuevo en los próximos 2 minutos.",
         "remote_is_motor": "Ese botón está registrado en un motor, no en un mando — elija un botón diferente.",
-        "remote_already_bound": "Ese mando ya está vinculado a {other_motor_name} — desvinculelo allí primero.",
+        "remote_already_bound": "Ese botón del mando ya está vinculado a {other_motor_name} — desvincúlelo allí primero e inténtelo de nuevo.",
         "remote_press_mismatch": "Las dos pulsaciones no coincidieron — inténtelo de nuevo.",
         "remote_capture_timeout": "Mando no detectado — pulse un botón dentro de la ventana de escucha.",
         "remote_capture_disconnected": "El stick USB se desconectó — reconéctelo e inténtelo de nuevo.",

@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   ### Removed       — removed features
 -->
 
+## [1.3.0] - 2026-07-02
+
+### Fixed
+
+- Binding a **second channel** of a multi-channel handheld remote to a *different* motor now works. Previously a remote was identified by its shared hardware id alone, so every channel of one remote collapsed into a single binding and a second channel was rejected as "already bound" (or failed with "no button was pressed"). Remotes are now identified by channel and id, so each channel can control its own motor with no cross-talk. Upgraders whose first channel was bound before this change are handled automatically — binding a second channel shows a confirmation and leaves the existing motor's binding untouched. Existing single-channel bindings are unaffected.
+
 ## [1.2.4] - 2026-07-01
 
 ### Fixed
@@ -90,7 +96,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Stick status sensors (connection status, firmware version, mode)
 - HACS-compatible via zip_release delivery
 
-[unreleased]: https://github.com/hrabbach/ha-schellenberg-usb-plus/compare/v1.2.4...HEAD
+[unreleased]: https://github.com/hrabbach/ha-schellenberg-usb-plus/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.3.0
 [1.2.4]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.2.4
 [1.2.3]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.2.3
 [1.2.2]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.2.2

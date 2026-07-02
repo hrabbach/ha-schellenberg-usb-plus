@@ -71,9 +71,7 @@ def _make_mock_api(
     call order, enabling abort-before-delegation_pair ordering assertions.
     """
     mock_api = MagicMock()
-    mock_api.delegation_pair = AsyncMock(
-        return_value=delegation_return
-    )
+    mock_api.delegation_pair = AsyncMock(return_value=delegation_return)
     mock_api.abort_delegation_pair = MagicMock()
     return mock_api
 
@@ -181,13 +179,9 @@ async def test_delegate_transmit_abort_called_before_delegation_pair(
     calls = mock_api.mock_calls
     # Find index of abort and delegation_pair calls
     abort_indices = [
-        i for i, c in enumerate(calls)
-        if c == call.abort_delegation_pair()
+        i for i, c in enumerate(calls) if c == call.abort_delegation_pair()
     ]
-    pair_indices = [
-        i for i, c in enumerate(calls)
-        if c == call.delegation_pair()
-    ]
+    pair_indices = [i for i, c in enumerate(calls) if c == call.delegation_pair()]
     assert abort_indices, "abort_delegation_pair was never called"
     assert pair_indices, "delegation_pair was never called"
     # abort must precede delegation_pair on first attempt
@@ -219,7 +213,7 @@ async def test_delegate_transmit_retry_abort_called_before_delegation_pair(
     result_1 = await handler.async_step_delegate_transmit({})
     assert result_1["type"] == "form"
     assert result_1["step_id"] == "delegate_transmit"
-    assert result_1.get("errors", {}).get("base") == "delegation_failed"
+    assert (result_1.get("errors") or {}).get("base") == "delegation_failed"
 
     # Capture call order after first attempt
     calls_after_first = list(mock_api.mock_calls)
@@ -233,18 +227,14 @@ async def test_delegate_transmit_retry_abort_called_before_delegation_pair(
 
     # Find abort and pair indices for the RETRY (second attempt only)
     # calls_after_first has first-attempt calls; retry calls are the remainder
-    retry_calls = list(calls_all[len(calls_after_first):])
+    retry_calls = list(calls_all[len(calls_after_first) :])
     abort_retry_indices = [
-        i for i, c in enumerate(retry_calls)
-        if c == call.abort_delegation_pair()
+        i for i, c in enumerate(retry_calls) if c == call.abort_delegation_pair()
     ]
     pair_retry_indices = [
-        i for i, c in enumerate(retry_calls)
-        if c == call.delegation_pair()
+        i for i, c in enumerate(retry_calls) if c == call.delegation_pair()
     ]
-    assert abort_retry_indices, (
-        "abort_delegation_pair not called on retry"
-    )
+    assert abort_retry_indices, "abort_delegation_pair not called on retry"
     assert pair_retry_indices, "delegation_pair not called on retry"
     assert abort_retry_indices[0] < pair_retry_indices[0], (
         "On retry, abort_delegation_pair must precede delegation_pair"
@@ -271,7 +261,7 @@ async def test_delegate_transmit_connection_error_retries_in_place(
 
     assert result["type"] == "form"
     assert result["step_id"] == "delegate_transmit"
-    assert result.get("errors", {}).get("base") == "delegation_failed"
+    assert (result.get("errors") or {}).get("base") == "delegation_failed"
 
 
 @pytest.mark.asyncio
@@ -280,9 +270,7 @@ async def test_delegate_transmit_os_error_retries_in_place(
 ) -> None:
     """OSError → also retries in place with delegation_failed (same branch)."""
     mock_api = _make_mock_api()
-    mock_api.delegation_pair = AsyncMock(
-        side_effect=OSError("os error")
-    )
+    mock_api.delegation_pair = AsyncMock(side_effect=OSError("os error"))
     mock_hub_entry.runtime_data = mock_api  # type: ignore[attr-defined]
 
     handler = _make_handler(hass, mock_hub_entry.entry_id)
@@ -291,7 +279,7 @@ async def test_delegate_transmit_os_error_retries_in_place(
 
     assert result["type"] == "form"
     assert result["step_id"] == "delegate_transmit"
-    assert result.get("errors", {}).get("base") == "delegation_failed"
+    assert (result.get("errors") or {}).get("base") == "delegation_failed"
 
 
 @pytest.mark.asyncio
@@ -300,9 +288,7 @@ async def test_delegate_transmit_device_limit_reached_retries_in_place(
 ) -> None:
     """DeviceLimitReached → re-shows delegate_transmit with device_limit_reached."""
     mock_api = _make_mock_api()
-    mock_api.delegation_pair = AsyncMock(
-        side_effect=DeviceLimitReached
-    )
+    mock_api.delegation_pair = AsyncMock(side_effect=DeviceLimitReached)
     mock_hub_entry.runtime_data = mock_api  # type: ignore[attr-defined]
 
     handler = _make_handler(hass, mock_hub_entry.entry_id)
@@ -311,7 +297,7 @@ async def test_delegate_transmit_device_limit_reached_retries_in_place(
 
     assert result["type"] == "form"
     assert result["step_id"] == "delegate_transmit"
-    assert result.get("errors", {}).get("base") == "device_limit_reached"
+    assert (result.get("errors") or {}).get("base") == "device_limit_reached"
 
 
 @pytest.mark.asyncio
@@ -370,9 +356,7 @@ async def test_delegate_name_submit_advances_to_position(
     handler = _make_handler(hass, mock_hub_entry.entry_id)
     handler._pending_device_enum = "10"
 
-    result = await handler.async_step_delegate_name(
-        {"device_name": "My Motor"}
-    )
+    result = await handler.async_step_delegate_name({"device_name": "My Motor"})
 
     assert result["type"] == "form"
     assert result["step_id"] == "delegate_position"
@@ -402,9 +386,7 @@ async def test_delegate_position_creates_entry(
     handler._pending_device_enum = "10"
     handler._pending_device_name = "My Motor"
 
-    result = await handler.async_step_delegate_position(
-        {"initial_position": 75}
-    )
+    result = await handler.async_step_delegate_position({"initial_position": 75})
 
     assert result["type"] == "create_entry"
     assert result["data"][CONF_BIDIRECTIONAL] is False
@@ -440,9 +422,7 @@ async def test_delegate_name_default_fallback(
     await handler.async_step_delegate_name({"device_name": ""})
     # Advance: position step submission
     handler._pending_device_enum = "1A"  # ensure still set
-    result = await handler.async_step_delegate_position(
-        {"initial_position": 100}
-    )
+    result = await handler.async_step_delegate_position({"initial_position": 100})
 
     assert result["type"] == "create_entry"
     # title should be the fallback name
@@ -481,16 +461,12 @@ async def test_delegate_end_to_end_zero_frame_creation(
     assert result["step_id"] == "delegate_name"
 
     # Step 4: submit name → position form
-    result = await handler.async_step_delegate_name(
-        {"device_name": "Motor A"}
-    )
+    result = await handler.async_step_delegate_name({"device_name": "Motor A"})
     assert result["type"] == "form"
     assert result["step_id"] == "delegate_position"
 
     # Step 5: submit position → create entry
-    result = await handler.async_step_delegate_position(
-        {"initial_position": 50}
-    )
+    result = await handler.async_step_delegate_position({"initial_position": 50})
     assert result["type"] == "create_entry"
     assert result["data"][CONF_BIDIRECTIONAL] is False
     assert result["data"][CONF_DEVICE_ID] == "10"

@@ -29,12 +29,17 @@ class SchellenbergRemoteEventEntity(EventEntity):
         device_id: str,
         device_enum: str,
         remote_id: str,
+        remote_enum: str | None,
     ) -> None:
         """Initialize the remote event entity."""
         self._api = api
         self._device_id = device_id
         self._device_enum = device_enum
         self._remote_id = remote_id
+        # str | None; channel enum of the bound remote (v1.4). Absent on
+        # legacy single-channel binds — register_remote tolerates None via
+        # the (None, remote_id) wildcard slot.
+        self._remote_enum = remote_enum
         self._attr_event_types: list[str] = [
             "up",
             "down",
@@ -58,16 +63,22 @@ class SchellenbergRemoteEventEntity(EventEntity):
         # Register unconditionally — the bidirectional exclusion lives
         # entirely in event.py's creation guard (Option A), so this entity
         # only ever exists for a timed motor (D-03).
-        self._api.register_remote(self._remote_id, self._device_id, self._device_enum)
+        self._api.register_remote(
+            self._remote_id,
+            self._remote_enum,
+            self._device_id,
+            self._device_enum,
+        )
 
-        # Snapshot both api and remote_id so the closure captures no
+        # Snapshot api, remote_id, and remote_enum so the closure captures no
         # implicit self reference (self._api evaluated at call-time
         # would still hold self alive via the closure).
         api_snapshot = self._api
         remote_id_snapshot = self._remote_id
+        remote_enum_snapshot = self._remote_enum
 
         def _cleanup_remote() -> None:
-            api_snapshot.unregister_remote(remote_id_snapshot)
+            api_snapshot.unregister_remote(remote_id_snapshot, remote_enum_snapshot)
 
         self.async_on_remove(_cleanup_remote)
         self.async_on_remove(

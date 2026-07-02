@@ -27,6 +27,7 @@ from .const import (
     CONF_CLOSE_TIME,
     CONF_INITIAL_POSITION,
     CONF_OPEN_TIME,
+    CONF_REMOTE_ENUM,
     CONF_REMOTE_ID,
     DOMAIN,
     EVENT_STARTED_MOVING_DOWN,
@@ -120,6 +121,9 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
         # Only timed motors may have a bound remote — bidirectional motors
         # use the device-event path instead and this field is ignored.
         self._remote_id: str | None = device_data_dict.get(CONF_REMOTE_ID)
+        # str | None; channel enum of the bound remote (v1.4). Absent on
+        # legacy single-channel binds — register_remote tolerates None.
+        self._remote_enum: str | None = device_data_dict.get(CONF_REMOTE_ENUM)
         self._initial_position: int | None = (
             int(device_data_dict[CONF_INITIAL_POSITION])
             if CONF_INITIAL_POSITION in device_data_dict
@@ -341,17 +345,21 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
         # use the SIGNAL_DEVICE_EVENT path above and are explicitly excluded.
         if self._remote_id and not self._is_bidirectional:
             self._api.register_remote(
-                self._remote_id, self._device_id, self._device_enum
+                self._remote_id,
+                self._remote_enum,
+                self._device_id,
+                self._device_enum,
             )
 
-            # Capture into a local so the closure does not hold a reference to
+            # Capture into locals so the closure does not hold a reference to
             # `self` beyond what is needed for cleanup (avoids a cycle if
-            # `_remote_id` were ever reassigned, though it is effectively
-            # immutable after __init__).
+            # `_remote_id`/`_remote_enum` were ever reassigned, though they
+            # are effectively immutable after __init__).
             remote_id_snapshot = self._remote_id
+            remote_enum_snapshot = self._remote_enum
 
             def _cleanup_remote() -> None:
-                self._api.unregister_remote(remote_id_snapshot)
+                self._api.unregister_remote(remote_id_snapshot, remote_enum_snapshot)
 
             self.async_on_remove(_cleanup_remote)
             self.async_on_remove(
@@ -531,9 +539,7 @@ class SchellenbergCover(CoverEntity, RestoreEntity):
         self.async_write_ha_state()
 
     @callback
-    def _handle_remote_event(
-        self, command: str, receive_timestamp: float
-    ) -> None:
+    def _handle_remote_event(self, command: str, receive_timestamp: float) -> None:
         """Handle a remote button press event for this timed motor.
 
         Called only when a bound remote is registered (guard in async_added_to_hass).

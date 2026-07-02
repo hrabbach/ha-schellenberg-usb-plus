@@ -173,6 +173,14 @@
             "listen_first": "Erneut versuchen"
           }
         },
+        "listen_confirm_migrate": {
+          "title": "Kanal zu {device_name} hinzufügen?",
+          "description": "Fernbedienung **{remote_id}** wurde zweimal erkannt. Ihr anderer Kanal steuert derzeit **{other_motor_name}**, das weiterhin funktioniert. Diesen Kanal zu {device_name} hinzufügen?",
+          "menu_options": {
+            "listen_confirm_apply": "Kanal hinzufügen",
+            "listen_first": "Erneut versuchen"
+          }
+        },
         "remove_confirm": {
           "title": "Fernbedienung von {device_name} entfernen?",
           "description": "Dadurch wird die Fernbedienungsverknüpfung von {device_name} entfernt. Die Fernbedienungs-Ereignis-Entität verschwindet und die durch diese Fernbedienung ausgelöste Positionsverfolgung wird beendet.",
@@ -195,7 +203,7 @@
         "timed_cal_too_short": "Der Lauf war zu kurz (weniger als 2 Sekunden) -- wahrscheinlich eine Doppelbetätigung oder Fehlauslösung. Bitte führen Sie den Rollladen über Ihre Fernbedienung in die vollständig geöffnete Position und versuchen Sie es erneut.",
         "timed_cal_too_long": "Der Lauf hat 120 Sekunden überschritten -- der Rollladen läuft möglicherweise noch. Bitte führen Sie den Rollladen über Ihre Fernbedienung in die vollständig geöffnete Position und versuchen Sie es innerhalb von 2 Minuten erneut.",
         "remote_is_motor": "Diese Taste ist einem Motor zugewiesen, nicht einer Fernbedienung — wählen Sie eine andere Taste.",
-        "remote_already_bound": "Diese Fernbedienung ist bereits mit {other_motor_name} verknüpft — entfernen Sie sie dort zuerst.",
+        "remote_already_bound": "Diese Fernbedienungstaste ist bereits mit {other_motor_name} verknüpft — entfernen Sie sie dort zuerst und versuchen Sie es dann erneut.",
         "remote_press_mismatch": "Die zwei Tastendrücke stimmten nicht überein — bitte versuchen Sie es erneut.",
         "remote_capture_timeout": "Keine Fernbedienung erkannt — drücken Sie eine Taste innerhalb des Empfangsfensters.",
         "remote_capture_disconnected": "Der USB-Stick wurde getrennt — schließen Sie ihn wieder an und versuchen Sie es erneut.",

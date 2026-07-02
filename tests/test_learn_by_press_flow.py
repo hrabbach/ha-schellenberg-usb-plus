@@ -42,6 +42,7 @@ from custom_components.schellenberg_usb.config_flow import (
 )
 from custom_components.schellenberg_usb.const import (
     CONF_BIDIRECTIONAL,
+    CONF_REMOTE_ENUM,
     CONF_REMOTE_ID,
     CONF_SERIAL_PORT,
     DOMAIN,
@@ -89,7 +90,7 @@ def mock_hub_entry(hass: HomeAssistant) -> ConfigEntry:
     )
     hass.config_entries._entries[entry.entry_id] = entry
     mock_api = MagicMock()
-    mock_api.learn_remote_raw_and_wait = AsyncMock(return_value="AABBCC")
+    mock_api.learn_remote_raw_and_wait = AsyncMock(return_value=("10", "AABBCC"))
     mock_api._registered_devices = {}
     mock_api._remote_to_motor = {}
     mock_api.is_connected = True
@@ -97,15 +98,33 @@ def mock_hub_entry(hass: HomeAssistant) -> ConfigEntry:
     # registration dicts. Back them with side_effects that read the (possibly
     # per-test reassigned) dicts at call time so existing policy tests are
     # exercised through the real public surface.
+    # Phase 17: is_registered_motor is still id-keyed (motors have no channel
+    # enum). _remote_to_motor is now (enum, id)-keyed so the bound check scans
+    # by the id component only (mirrors _is_bound_remote_id in the real api).
     mock_api.is_registered_motor = MagicMock(
         side_effect=lambda did: (
             did in mock_api._registered_devices
-            and did not in mock_api._remote_to_motor
+            and not any(k[1] == did for k in mock_api._remote_to_motor)
         )
     )
     mock_api.bound_motor_for = MagicMock(
-        side_effect=lambda rid: mock_api._remote_to_motor.get(rid)
+        side_effect=lambda renum, rid: mock_api._remote_to_motor.get((renum, rid))
     )
+
+    # Plan 17-05: Case B now calls bound_motor_match (not bound_motor_for).
+    # Side-effect mirrors the real accessor: specific key first, then (None, id)
+    # wildcard fallback, so both the reject path and the sibling-allow path are
+    # exercised correctly through the same live _remote_to_motor dict.
+    def _bound_motor_match(renum: str | None, rid: str) -> tuple[str | None, str]:
+        motor = mock_api._remote_to_motor.get((renum, rid))
+        if motor is not None:
+            return (motor, "specific")
+        motor = mock_api._remote_to_motor.get((None, rid))
+        if motor is not None:
+            return (motor, "wildcard")
+        return (None, "none")
+
+    mock_api.bound_motor_match = MagicMock(side_effect=_bound_motor_match)
     entry.runtime_data = mock_api  # type: ignore[attr-defined]
     return entry
 
@@ -122,7 +141,9 @@ def _make_no_remote_subentry() -> MagicMock:
     return subentry
 
 
-def _make_with_remote_subentry(remote_id: str = "112233") -> MagicMock:
+def _make_with_remote_subentry(
+    remote_id: str = "112233", remote_enum: str = "10"
+) -> MagicMock:
     """Subentry with an existing bound remote (change/remove path)."""
     subentry = MagicMock()
     subentry.data = {
@@ -130,6 +151,7 @@ def _make_with_remote_subentry(remote_id: str = "112233") -> MagicMock:
         "device_enum": "1A",
         CONF_BIDIRECTIONAL: False,
         CONF_REMOTE_ID: remote_id,
+        CONF_REMOTE_ENUM: remote_enum,
     }
     subentry.title = "Test Blind"
     return subentry
@@ -159,9 +181,10 @@ async def _drive_listen_first(
     In the HA pytest harness AsyncMock tasks resolve synchronously so a single
     call with one event-loop tick is sufficient to reach SHOW_PROGRESS_DONE.
     """
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(handler, "_get_entry", return_value=entry):
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=entry),
+    ):
         result = await handler.async_step_listen_first(None)
         if result["type"] == FlowResultType.SHOW_PROGRESS:
             # Task not yet done — give the event loop one tick
@@ -175,9 +198,10 @@ async def _drive_listen_second(
     entry: ConfigEntry,
 ) -> None:
     """Drive async_step_listen_second to completion."""
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(handler, "_get_entry", return_value=entry):
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=entry),
+    ):
         result = await handler.async_step_listen_second(None)
         if result["type"] == FlowResultType.SHOW_PROGRESS:
             await asyncio.sleep(0)
@@ -201,14 +225,10 @@ async def test_reconfigure_menu_no_binding_shows_bind(
     """
     handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
     subentry = _make_no_remote_subentry()
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ):
+    with patch.object(handler, "_get_reconfigure_subentry", return_value=subentry):
         result = await handler.async_step_reconfigure(None)
 
-    assert result["type"] == "menu", (
-        f"Expected menu, got {result['type']!r}"
-    )
+    assert result["type"] == "menu", f"Expected menu, got {result['type']!r}"
     assert "bind_remote" in result["menu_options"], (
         f"bind_remote missing from {result['menu_options']}"
     )
@@ -218,7 +238,7 @@ async def test_reconfigure_menu_no_binding_shows_bind(
     # Regression (menu-title-formatjs-error): the reconfigure_menu title is
     # "Configure {device_name}"; the menu MUST supply device_name or the
     # frontend formatjs renders MISSING_VALUE as the menu title.
-    assert result["description_placeholders"]["device_name"] == "Test Blind", (
+    assert (result["description_placeholders"] or {})["device_name"] == "Test Blind", (
         "reconfigure_menu must pass description_placeholders['device_name'] "
         "(strings title is 'Configure {device_name}')."
     )
@@ -235,9 +255,7 @@ async def test_reconfigure_menu_with_binding_shows_change_remove(
     """
     handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
     subentry = _make_with_remote_subentry()
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ):
+    with patch.object(handler, "_get_reconfigure_subentry", return_value=subentry):
         result = await handler.async_step_reconfigure(None)
 
     assert result["type"] == "menu"
@@ -247,7 +265,7 @@ async def test_reconfigure_menu_with_binding_shows_change_remove(
     assert "bind_remote" not in result["menu_options"]
     # Regression (menu-title-formatjs-error): supply device_name for the
     # "Configure {device_name}" title.
-    assert result["description_placeholders"]["device_name"] == "Test Blind", (
+    assert (result["description_placeholders"] or {})["device_name"] == "Test Blind", (
         "reconfigure_menu must pass description_placeholders['device_name']."
     )
 
@@ -267,7 +285,7 @@ async def test_reconfigure_menu_resets_capture_state(
     subentry = _make_no_remote_subentry()
 
     # Seed stale state
-    handler._first_capture_id = "STALE1"
+    handler._first_capture = ("10", "STALE1")
     handler._listen_error_key = "remote_capture_timeout"
     handler._listen_error_placeholders = {"k": "v"}
     handler._is_change_mode = True
@@ -285,13 +303,11 @@ async def test_reconfigure_menu_resets_capture_state(
 
     handler._listen_first_task = _FakeTask()  # type: ignore[assignment]
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ):
+    with patch.object(handler, "_get_reconfigure_subentry", return_value=subentry):
         result = await handler.async_step_reconfigure_menu(None)
 
     # Capture state must be cleared
-    assert handler._first_capture_id is None
+    assert handler._first_capture is None
     assert handler._listen_error_key is None
     assert handler._listen_error_placeholders is None
     assert handler._is_change_mode is False
@@ -319,20 +335,21 @@ async def test_listen_first_captures_id(
     In the HA pytest harness an AsyncMock task may resolve synchronously so the
     step can return SHOW_PROGRESS_DONE on the first poll. Either SHOW_PROGRESS
     or SHOW_PROGRESS_DONE is acceptable on the first call; after settling the
-    handler must store _first_capture_id and indicate next_step=listen_second.
+    handler must store _first_capture and indicate next_step=listen_second.
     Pins: RMT-01 (learn-by-press captures remote id).
     """
     handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
     subentry = _make_no_remote_subentry()
     mock_hub_entry.runtime_data.learn_remote_raw_and_wait = AsyncMock(  # type: ignore[union-attr]
-        return_value="AABBCC"
+        return_value=("10", "AABBCC")
     )
     mock_hub_entry.runtime_data._registered_devices = {}  # type: ignore[union-attr]
     mock_hub_entry.runtime_data._remote_to_motor = {}  # type: ignore[union-attr]
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=mock_hub_entry),
+    ):
         result = await handler.async_step_listen_first(None)
         if result["type"] == FlowResultType.SHOW_PROGRESS:
             await asyncio.sleep(0)
@@ -340,8 +357,8 @@ async def test_listen_first_captures_id(
 
     # After the task settles the step must advance (SHOW_PROGRESS_DONE)
     assert result["type"] == FlowResultType.SHOW_PROGRESS_DONE
-    # The captured id must be stored
-    assert handler._first_capture_id == "AABBCC"
+    # The captured (enum, id) tuple must be stored
+    assert handler._first_capture == ("10", "AABBCC")
 
 
 @pytest.mark.asyncio
@@ -366,24 +383,27 @@ async def test_listen_first_progress_supplies_device_name(
 
     never_done = asyncio.Event()
 
-    async def _pending_capture(timeout: float = 15.0) -> str | None:
+    async def _pending_capture(
+        timeout: float = 15.0,
+    ) -> tuple[str, str] | None:
         await never_done.wait()  # never set -> task stays pending
         return None
 
     mock_hub_entry.runtime_data.learn_remote_raw_and_wait = _pending_capture  # type: ignore[union-attr]
 
     try:
-        with patch.object(
-            handler, "_get_reconfigure_subentry", return_value=subentry
-        ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+        with (
+            patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+            patch.object(handler, "_get_entry", return_value=mock_hub_entry),
+        ):
             result = await handler.async_step_listen_first(None)
 
         assert result["type"] == FlowResultType.SHOW_PROGRESS, (
             f"Expected SHOW_PROGRESS while capture pending, got {result['type']!r}"
         )
-        assert (
-            result["description_placeholders"]["device_name"] == "Test Blind"
-        ), (
+        assert (result["description_placeholders"] or {})[
+            "device_name"
+        ] == "Test Blind", (
             "listen_first progress step must pass "
             "description_placeholders['device_name'] (strings description uses "
             "{device_name})."
@@ -428,12 +448,12 @@ class _GatedCapture:
     re-entry path.
     """
 
-    def __init__(self, result: str | None) -> None:
+    def __init__(self, result: tuple[str, str] | None) -> None:
         self._result = result
         self.gate = asyncio.Event()
         self.call_count = 0
 
-    async def __call__(self, timeout: float = 15.0) -> str | None:
+    async def __call__(self, timeout: float = 15.0) -> tuple[str, str] | None:
         self.call_count += 1
         await self.gate.wait()
         return self._result
@@ -455,19 +475,20 @@ async def test_listen_first_completed_task_reentry_advances(
     Reproduces remote-bind-press-stuck: first call spawns a genuinely PENDING
     capture -> SHOW_PROGRESS. After the task resolves (press captured), the
     framework re-invokes the step with user_input=None. That re-entry MUST read
-    the result and return SHOW_PROGRESS_DONE with _first_capture_id set — NOT
+    the result and return SHOW_PROGRESS_DONE with _first_capture set — NOT
     clear the done task and spawn a fresh capture (the forever-spinner bug).
     """
     handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
     subentry = _make_no_remote_subentry()
-    capture = _GatedCapture(result="AABBCC")
+    capture = _GatedCapture(result=("10", "AABBCC"))
     mock_hub_entry.runtime_data.learn_remote_raw_and_wait = capture  # type: ignore[union-attr]
     mock_hub_entry.runtime_data._registered_devices = {}  # type: ignore[union-attr]
     mock_hub_entry.runtime_data._remote_to_motor = {}  # type: ignore[union-attr]
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=mock_hub_entry),
+    ):
         # First entry: pending task -> SHOW_PROGRESS
         first = await handler.async_step_listen_first(None)
         assert first["type"] == FlowResultType.SHOW_PROGRESS, (
@@ -490,7 +511,7 @@ async def test_listen_first_completed_task_reentry_advances(
         f"{second['type']!r} — the done task was cleared and a fresh capture "
         "re-armed (the forever-spinner re-arm loop)."
     )
-    assert handler._first_capture_id == "AABBCC"
+    assert handler._first_capture == ("10", "AABBCC")
     # Exactly ONE capture window must have been opened (no re-arm).
     assert capture.call_count == 1, (
         f"capture re-armed {capture.call_count} times — expected exactly 1"
@@ -513,9 +534,10 @@ async def test_listen_first_completed_timeout_reentry_advances(
     mock_hub_entry.runtime_data.learn_remote_raw_and_wait = capture  # type: ignore[union-attr]
     mock_hub_entry.runtime_data.is_connected = True  # type: ignore[union-attr]
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=mock_hub_entry),
+    ):
         first = await handler.async_step_listen_first(None)
         assert first["type"] == FlowResultType.SHOW_PROGRESS
         capture.gate.set()
@@ -540,13 +562,14 @@ async def test_listen_second_completed_task_reentry_advances(
     """
     handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
     subentry = _make_no_remote_subentry()
-    handler._first_capture_id = "AABBCC"
-    capture = _GatedCapture(result="AABBCC")  # matching second press
+    handler._first_capture = ("10", "AABBCC")
+    capture = _GatedCapture(result=("10", "AABBCC"))  # matching second press
     mock_hub_entry.runtime_data.learn_remote_raw_and_wait = capture  # type: ignore[union-attr]
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=mock_hub_entry),
+    ):
         first = await handler.async_step_listen_second(None)
         assert first["type"] == FlowResultType.SHOW_PROGRESS
         second_task = handler._listen_second_task
@@ -584,9 +607,10 @@ async def test_capture_timeout_shows_retry_no_persist(
     )
     mock_hub_entry.runtime_data.is_connected = True  # type: ignore[union-attr]
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=mock_hub_entry),
+    ):
         result = await handler.async_step_listen_first(None)
         if result["type"] == FlowResultType.SHOW_PROGRESS:
             await asyncio.sleep(0)
@@ -597,15 +621,14 @@ async def test_capture_timeout_shows_retry_no_persist(
     assert handler._listen_error_key == "remote_capture_timeout"
 
     # Drive the listen_timeout form (user_input=None path)
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(
-        handler.hass.config_entries, "async_update_subentry"
-    ) as mock_upd:
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler.hass.config_entries, "async_update_subentry") as mock_upd,
+    ):
         form_result = await handler.async_step_listen_timeout(None)
 
     assert form_result["type"] == "form"
-    assert form_result["errors"]["base"] == "remote_capture_timeout"
+    assert (form_result["errors"] or {})["base"] == "remote_capture_timeout"
     mock_upd.assert_not_called()
 
 
@@ -625,9 +648,10 @@ async def test_capture_disconnect_distinct_copy(
     )
     mock_hub_entry.runtime_data.is_connected = False  # type: ignore[union-attr]
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=mock_hub_entry),
+    ):
         result = await handler.async_step_listen_first(None)
         if result["type"] == FlowResultType.SHOW_PROGRESS:
             await asyncio.sleep(0)
@@ -638,7 +662,7 @@ async def test_capture_disconnect_distinct_copy(
     with patch.object(handler, "_get_reconfigure_subentry", return_value=subentry):
         form_result = await handler.async_step_listen_timeout(None)
 
-    assert form_result["errors"]["base"] == "remote_capture_disconnected"
+    assert (form_result["errors"] or {})["base"] == "remote_capture_disconnected"
 
 
 # ---------------------------------------------------------------------------
@@ -661,25 +685,26 @@ async def test_double_press_match_reaches_confirm(
 
     call_count = 0
 
-    async def _mock_capture(timeout: float = 15.0) -> str | None:
+    async def _mock_capture(timeout: float = 15.0) -> tuple[str, str] | None:
         nonlocal call_count
         call_count += 1
-        return "AABBCC"  # both presses return the same id
+        return ("10", "AABBCC")  # both presses return the same (enum, id)
 
     mock_hub_entry.runtime_data.learn_remote_raw_and_wait = _mock_capture  # type: ignore[union-attr]
     mock_hub_entry.runtime_data._registered_devices = {}  # type: ignore[union-attr]
     mock_hub_entry.runtime_data._remote_to_motor = {}  # type: ignore[union-attr]
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=mock_hub_entry),
+    ):
         # Drive listen_first to completion
         result = await handler.async_step_listen_first(None)
         if result["type"] == FlowResultType.SHOW_PROGRESS:
             await asyncio.sleep(0)
             result = await handler.async_step_listen_first(None)
         assert result["type"] == FlowResultType.SHOW_PROGRESS_DONE
-        assert handler._first_capture_id == "AABBCC"
+        assert handler._first_capture == ("10", "AABBCC")
 
         # Drive listen_second to completion (matching press)
         result2 = await handler.async_step_listen_second(None)
@@ -697,10 +722,11 @@ async def test_double_press_match_reaches_confirm(
     # Regression (menu-title-formatjs-error): listen_confirm title/description
     # use {device_name}; the code must pass 'device_name' (not 'motor_name') or
     # the frontend formatjs renders MISSING_VALUE.
-    assert (
-        result_confirm["description_placeholders"]["device_name"]
-        == "Test Blind"
-    ), "listen_confirm must pass description_placeholders['device_name']."
+    assert (result_confirm["description_placeholders"] or {})[
+        "device_name"
+    ] == "Test Blind", (
+        "listen_confirm must pass description_placeholders['device_name']."
+    )
 
 
 @pytest.mark.asyncio
@@ -717,26 +743,27 @@ async def test_double_press_mismatch_errors(
 
     call_count = 0
 
-    async def _mock_capture(timeout: float = 15.0) -> str | None:
+    async def _mock_capture(timeout: float = 15.0) -> tuple[str, str] | None:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return "AABBCC"
-        return "DDEEFF"  # second press: different remote
+            return ("10", "AABBCC")
+        return ("20", "DDEEFF")  # second press: different channel + remote
 
     mock_hub_entry.runtime_data.learn_remote_raw_and_wait = _mock_capture  # type: ignore[union-attr]
     mock_hub_entry.runtime_data._registered_devices = {}  # type: ignore[union-attr]
     mock_hub_entry.runtime_data._remote_to_motor = {}  # type: ignore[union-attr]
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=mock_hub_entry),
+    ):
         # Drive listen_first (first press)
         result = await handler.async_step_listen_first(None)
         if result["type"] == FlowResultType.SHOW_PROGRESS:
             await asyncio.sleep(0)
             result = await handler.async_step_listen_first(None)
-        assert handler._first_capture_id == "AABBCC"
+        assert handler._first_capture == ("10", "AABBCC")
 
         # Drive listen_second (second press — mismatch)
         result2 = await handler.async_step_listen_second(None)
@@ -745,7 +772,7 @@ async def test_double_press_mismatch_errors(
             result2 = await handler.async_step_listen_second(None)
 
     assert handler._listen_error_key == "remote_press_mismatch"
-    assert handler._first_capture_id is None
+    assert handler._first_capture is None
 
     with patch.object(handler, "_get_reconfigure_subentry", return_value=subentry):
         form = await handler.async_step_listen_timeout(None)
@@ -771,19 +798,17 @@ async def test_reject_is_a_motor(
     subentry = _make_no_remote_subentry()
 
     mock_hub_entry.runtime_data.learn_remote_raw_and_wait = AsyncMock(  # type: ignore[union-attr]
-        return_value="AABBCC"
+        return_value=("10", "AABBCC")
     )
     # Case A: id is a registered motor AND not in _remote_to_motor
     mock_hub_entry.runtime_data._registered_devices = {"AABBCC": "10"}  # type: ignore[union-attr]
     mock_hub_entry.runtime_data._remote_to_motor = {}  # type: ignore[union-attr]
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(
-        handler, "_get_entry", return_value=mock_hub_entry
-    ), patch.object(
-        handler.hass.config_entries, "async_update_subentry"
-    ) as mock_upd:
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=mock_hub_entry),
+        patch.object(handler.hass.config_entries, "async_update_subentry") as mock_upd,
+    ):
         result = await handler.async_step_listen_first(None)
         if result["type"] == FlowResultType.SHOW_PROGRESS:
             await asyncio.sleep(0)
@@ -797,7 +822,7 @@ async def test_reject_is_a_motor(
     with patch.object(handler, "_get_reconfigure_subentry", return_value=subentry):
         form = await handler.async_step_listen_timeout(None)
 
-    assert form["errors"]["base"] == "remote_is_motor"
+    assert (form["errors"] or {})["base"] == "remote_is_motor"
 
 
 @pytest.mark.asyncio
@@ -815,28 +840,28 @@ async def test_reject_already_bound_elsewhere(
     subentry = _make_no_remote_subentry()
 
     mock_hub_entry.runtime_data.learn_remote_raw_and_wait = AsyncMock(  # type: ignore[union-attr]
-        return_value="AABBCC"
+        return_value=("10", "AABBCC")
     )
     mock_hub_entry.runtime_data._registered_devices = {}  # type: ignore[union-attr]
-    # "AABBCC" is bound to "OTHERMOT" (a different motor)
-    mock_hub_entry.runtime_data._remote_to_motor = {"AABBCC": "OTHERMOT"}  # type: ignore[union-attr]
+    # (enum="10", id="AABBCC") is bound to "OTHERMOT" (a different motor)
+    mock_hub_entry.runtime_data._remote_to_motor = {  # type: ignore[union-attr]
+        ("10", "AABBCC"): "OTHERMOT"
+    }
 
     # Register a sibling subentry for the other motor
     other_subentry = MagicMock()
     other_subentry.data = {"device_id": "OTHERMOT"}
     other_subentry.title = "Living Room Blind"
-    mock_hub_entry.subentries = {  # type: ignore[attr-defined]
+    mock_hub_entry.subentries = {  # type: ignore[assignment]
         "sub1": subentry,
         "sub2": other_subentry,
     }
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(
-        handler, "_get_entry", return_value=mock_hub_entry
-    ), patch.object(
-        handler.hass.config_entries, "async_update_subentry"
-    ) as mock_upd:
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=mock_hub_entry),
+        patch.object(handler.hass.config_entries, "async_update_subentry") as mock_upd,
+    ):
         result = await handler.async_step_listen_first(None)
         if result["type"] == FlowResultType.SHOW_PROGRESS:
             await asyncio.sleep(0)
@@ -852,8 +877,8 @@ async def test_reject_already_bound_elsewhere(
     with patch.object(handler, "_get_reconfigure_subentry", return_value=subentry):
         form = await handler.async_step_listen_timeout(None)
 
-    assert form["errors"]["base"] == "remote_already_bound"
-    assert form["description_placeholders"]["other_motor_name"] == (
+    assert (form["errors"] or {})["base"] == "remote_already_bound"
+    assert (form["description_placeholders"] or {})["other_motor_name"] == (
         "Living Room Blind"
     )
 
@@ -873,11 +898,9 @@ async def test_listen_confirm_is_two_option_menu(
     """
     handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
     subentry = _make_no_remote_subentry()
-    handler._first_capture_id = "AABBCC"
+    handler._first_capture = ("10", "AABBCC")
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ):
+    with patch.object(handler, "_get_reconfigure_subentry", return_value=subentry):
         result = await handler.async_step_listen_confirm(None)
 
     assert result["type"] == "menu"
@@ -895,17 +918,16 @@ async def test_confirm_apply_persists_remote_id(
     """
     handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
     subentry = _make_no_remote_subentry()
-    handler._first_capture_id = "AABBCC"
+    handler._first_capture = ("10", "AABBCC")
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(
-        handler, "_get_entry", return_value=mock_hub_entry
-    ), patch.object(
-        handler.hass.config_entries, "async_update_subentry"
-    ) as mock_upd, patch.object(
-        handler.hass.config_entries, "async_schedule_reload"
-    ) as mock_reload:
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=mock_hub_entry),
+        patch.object(handler.hass.config_entries, "async_update_subentry") as mock_upd,
+        patch.object(
+            handler.hass.config_entries, "async_schedule_reload"
+        ) as mock_reload,
+    ):
         result = await handler.async_step_listen_confirm_apply(None)
 
     mock_upd.assert_called_once()
@@ -915,6 +937,10 @@ async def test_confirm_apply_persists_remote_id(
         f"CONF_REMOTE_ID missing from persisted data: {persisted_data}"
     )
     assert persisted_data[CONF_REMOTE_ID] == "AABBCC"
+    assert CONF_REMOTE_ENUM in persisted_data, (
+        f"CONF_REMOTE_ENUM missing from persisted data: {persisted_data}"
+    )
+    assert persisted_data[CONF_REMOTE_ENUM] == "10"
     mock_reload.assert_called_once_with(mock_hub_entry.entry_id)
     assert result["type"] == "abort"
     assert result["reason"] == "reconfigure_successful"
@@ -932,20 +958,18 @@ async def test_retry_does_not_persist(
     """
     handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
     subentry = _make_no_remote_subentry()
-    handler._first_capture_id = "AABBCC"
+    handler._first_capture = ("10", "AABBCC")
     mock_hub_entry.runtime_data.learn_remote_raw_and_wait = AsyncMock(  # type: ignore[union-attr]
-        return_value="AABBCC"
+        return_value=("10", "AABBCC")
     )
     mock_hub_entry.runtime_data._registered_devices = {}  # type: ignore[union-attr]
     mock_hub_entry.runtime_data._remote_to_motor = {}  # type: ignore[union-attr]
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(
-        handler, "_get_entry", return_value=mock_hub_entry
-    ), patch.object(
-        handler.hass.config_entries, "async_update_subentry"
-    ) as mock_upd:
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=mock_hub_entry),
+        patch.object(handler.hass.config_entries, "async_update_subentry") as mock_upd,
+    ):
         # Retry -> re-enters listen_first (spawns new task)
         result = await handler.async_step_listen_first(None)
 
@@ -975,18 +999,16 @@ async def test_change_reuses_listen_confirm(
     handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
     subentry = _make_with_remote_subentry("112233")
     handler._is_change_mode = True
-    handler._first_capture_id = "AABBCC"
+    handler._first_capture = ("10", "AABBCC")
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ):
+    with patch.object(handler, "_get_reconfigure_subentry", return_value=subentry):
         result = await handler.async_step_listen_confirm(None)
 
     # Must be a menu (listen_confirm), not a form or abort
     assert result["type"] == "menu"
     # current_remote_id placeholder must be present in the change path
-    assert "current_remote_id" in result.get("description_placeholders", {})
-    assert result["description_placeholders"]["current_remote_id"] == "112233"
+    assert "current_remote_id" in (result.get("description_placeholders") or {})
+    assert (result["description_placeholders"] or {})["current_remote_id"] == "112233"
 
     # No change_confirm step must exist (REVIEW finding 6)
     assert not hasattr(handler, "async_step_change_confirm"), (
@@ -1005,17 +1027,16 @@ async def test_change_overwrites_remote_id(
     handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
     subentry = _make_with_remote_subentry("112233")
     handler._is_change_mode = True
-    handler._first_capture_id = "AABBCC"
+    handler._first_capture = ("10", "AABBCC")
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(
-        handler, "_get_entry", return_value=mock_hub_entry
-    ), patch.object(
-        handler.hass.config_entries, "async_update_subentry"
-    ) as mock_upd, patch.object(
-        handler.hass.config_entries, "async_schedule_reload"
-    ) as mock_reload:
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=mock_hub_entry),
+        patch.object(handler.hass.config_entries, "async_update_subentry") as mock_upd,
+        patch.object(
+            handler.hass.config_entries, "async_schedule_reload"
+        ) as mock_reload,
+    ):
         result = await handler.async_step_listen_confirm_apply(None)
 
     mock_upd.assert_called_once()
@@ -1023,6 +1044,9 @@ async def test_change_overwrites_remote_id(
 
     assert persisted_data.get(CONF_REMOTE_ID) == "AABBCC", (
         f"Expected new remote AABBCC, got {persisted_data.get(CONF_REMOTE_ID)!r}"
+    )
+    assert persisted_data.get(CONF_REMOTE_ENUM) == "10", (
+        f"Expected enum 10, got {persisted_data.get(CONF_REMOTE_ENUM)!r}"
     )
     mock_reload.assert_called_once_with(mock_hub_entry.entry_id)
     assert result["type"] == "abort"
@@ -1035,34 +1059,36 @@ async def test_change_repress_own_remote_allowed(
 ) -> None:
     """Re-press of the current remote during change (Case C) is allowed.
 
-    Policy Case C: the captured id is in _remote_to_motor but points to THIS
-    motor (device_id == "ABCDEF") — the flow must NOT reject it, and must store
-    _first_capture_id and advance toward listen_second.
+    Policy Case C: the captured (enum, id) is in _remote_to_motor but points to
+    THIS motor (device_id == "ABCDEF") — the flow must NOT reject it, and must
+    store _first_capture and advance toward listen_second.
     Pins: D-10 (Case C allowed), D-07 (Cases A/B rejected, C allowed).
     """
     handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
-    # Subentry's motor is "ABCDEF"; currently bound to "AABBCC"
+    # Subentry's motor is "ABCDEF"; currently bound to enum="10" id="AABBCC"
     subentry = _make_with_remote_subentry("AABBCC")
 
     mock_hub_entry.runtime_data.learn_remote_raw_and_wait = AsyncMock(  # type: ignore[union-attr]
-        return_value="AABBCC"
+        return_value=("10", "AABBCC")
     )
     mock_hub_entry.runtime_data._registered_devices = {}  # type: ignore[union-attr]
-    # "AABBCC" is in _remote_to_motor but points to THIS motor (Case C)
+    # (enum="10", id="AABBCC") is in _remote_to_motor but points to THIS motor
+    # (Case C) — must be allowed through, not rejected as "already bound".
     mock_hub_entry.runtime_data._remote_to_motor = {  # type: ignore[union-attr]
-        "AABBCC": "ABCDEF"
+        ("10", "AABBCC"): "ABCDEF"
     }
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=mock_hub_entry),
+    ):
         result = await handler.async_step_listen_first(None)
         if result["type"] == FlowResultType.SHOW_PROGRESS:
             await asyncio.sleep(0)
             result = await handler.async_step_listen_first(None)
 
     # Must NOT be rejected — _listen_error_key must not be set for a policy error
-    assert handler._first_capture_id == "AABBCC", (
+    assert handler._first_capture == ("10", "AABBCC"), (
         "Case C (re-press of own remote) must NOT be rejected"
     )
     # Result must advance (SHOW_PROGRESS_DONE toward listen_second)
@@ -1087,9 +1113,7 @@ async def test_remove_confirm_is_two_option_menu(
     handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
     subentry = _make_with_remote_subentry()
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ):
+    with patch.object(handler, "_get_reconfigure_subentry", return_value=subentry):
         result = await handler.async_step_remove_confirm(None)
 
     assert result["type"] == "menu"
@@ -1097,9 +1121,9 @@ async def test_remove_confirm_is_two_option_menu(
     assert "reconfigure_menu" in result["menu_options"]
     # Regression (menu-title-formatjs-error): remove_confirm title/description
     # use {device_name}; the code must pass 'device_name' (not 'motor_name').
-    assert (
-        result["description_placeholders"]["device_name"] == "Test Blind"
-    ), "remove_confirm must pass description_placeholders['device_name']."
+    assert (result["description_placeholders"] or {})["device_name"] == "Test Blind", (
+        "remove_confirm must pass description_placeholders['device_name']."
+    )
 
 
 @pytest.mark.asyncio
@@ -1115,15 +1139,14 @@ async def test_remove_confirm_apply_deletes_key(
     handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
     subentry = _make_with_remote_subentry("112233")
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(
-        handler, "_get_entry", return_value=mock_hub_entry
-    ), patch.object(
-        handler.hass.config_entries, "async_update_subentry"
-    ) as mock_upd, patch.object(
-        handler.hass.config_entries, "async_schedule_reload"
-    ) as mock_reload:
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=mock_hub_entry),
+        patch.object(handler.hass.config_entries, "async_update_subentry") as mock_upd,
+        patch.object(
+            handler.hass.config_entries, "async_schedule_reload"
+        ) as mock_reload,
+    ):
         result = await handler.async_step_remove_confirm_apply(None)
 
     mock_upd.assert_called_once()
@@ -1131,6 +1154,9 @@ async def test_remove_confirm_apply_deletes_key(
 
     assert CONF_REMOTE_ID not in persisted_data, (
         f"CONF_REMOTE_ID must NOT be in persisted data: {persisted_data}"
+    )
+    assert CONF_REMOTE_ENUM not in persisted_data, (
+        f"CONF_REMOTE_ENUM must NOT be in persisted data: {persisted_data}"
     )
     mock_reload.assert_called_once_with(mock_hub_entry.entry_id)
     assert result["type"] == "abort"
@@ -1146,33 +1172,33 @@ async def test_remove_confirm_apply_deletes_key(
 async def test_listen_first_clears_stale_capture_id_on_reentry(
     hass: HomeAssistant, mock_hub_entry: ConfigEntry
 ) -> None:
-    """A fresh listen_first clears a stale _first_capture_id (WR-03).
+    """A fresh listen_first clears a stale _first_capture (WR-03).
 
     Simulates a confirm-/timeout-"Try again" edge that re-enters listen_first
-    with a leftover id, where the retry capture then times out — so the success
-    branch that would re-set _first_capture_id is never reached. Only the
-    fresh-entry reset can clear the stale id, ensuring it can never be carried
-    into a later confirm/persist.
+    with a leftover (enum, id) tuple, where the retry capture then times out —
+    so the success branch that would re-set _first_capture is never reached.
+    Only the fresh-entry reset can clear the stale tuple, ensuring it can never
+    be carried into a later confirm/persist.
     """
     handler = _make_reconfigure_handler(hass, mock_hub_entry.entry_id)
     subentry = _make_no_remote_subentry()
-    handler._first_capture_id = "STALE1"  # leftover from a prior round
+    handler._first_capture = ("10", "STALE1")  # leftover from a prior round
     mock_hub_entry.runtime_data.learn_remote_raw_and_wait = AsyncMock(  # type: ignore[union-attr]
         return_value=None  # capture times out
     )
     mock_hub_entry.runtime_data.is_connected = True  # type: ignore[union-attr]
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=mock_hub_entry),
+    ):
         result = await handler.async_step_listen_first(None)
         if result["type"] == FlowResultType.SHOW_PROGRESS:
             await asyncio.sleep(0)
             await handler.async_step_listen_first(None)
 
-    assert handler._first_capture_id is None, (
-        "stale _first_capture_id must be cleared on a fresh listen_first entry "
-        "(WR-03)"
+    assert handler._first_capture is None, (
+        "stale _first_capture must be cleared on a fresh listen_first entry (WR-03)"
     )
 
 
@@ -1202,12 +1228,13 @@ async def test_listen_first_cancels_leftover_second_task(
 
     handler._listen_second_task = _FakeTask()  # type: ignore[assignment]
     mock_hub_entry.runtime_data.learn_remote_raw_and_wait = AsyncMock(  # type: ignore[union-attr]
-        return_value="AABBCC"
+        return_value=("10", "AABBCC")
     )
 
-    with patch.object(
-        handler, "_get_reconfigure_subentry", return_value=subentry
-    ), patch.object(handler, "_get_entry", return_value=mock_hub_entry):
+    with (
+        patch.object(handler, "_get_reconfigure_subentry", return_value=subentry),
+        patch.object(handler, "_get_entry", return_value=mock_hub_entry),
+    ):
         result = await handler.async_step_listen_first(None)
         if result["type"] == FlowResultType.SHOW_PROGRESS:
             await asyncio.sleep(0)

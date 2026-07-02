@@ -392,7 +392,8 @@ async def test_integration_message_to_cover_handler(hass: HomeAssistant) -> None
     are patched to isolate the behavior under test (REVIEW-12-01).
     """
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
-    api.register_remote("REM001", "MOT001", "10")
+    # Pre-populate binding; remote_enum=None → legacy (None, id) slot (Plan 01).
+    api.register_remote("REM001", None, "MOT001", "10")
 
     cover = SchellenbergCover(
         api=api,
@@ -407,9 +408,7 @@ async def test_integration_message_to_cover_handler(hass: HomeAssistant) -> None
     # Patch lifecycle side effects to avoid setup-error false-RED (REVIEW-12-01).
     with patch.object(cover, "async_get_last_state", return_value=None):
         with patch.object(cover, "async_write_ha_state"):
-            with patch(
-                "homeassistant.helpers.issue_registry.async_create_issue"
-            ):
+            with patch("homeassistant.helpers.issue_registry.async_create_issue"):
                 await cover.async_added_to_hass()
 
     # Drive the real _handle_message path and assert the cover handler fires.
@@ -447,16 +446,15 @@ async def test_register_remote_idempotent_on_readd(hass: HomeAssistant) -> None:
     for _ in range(2):
         with patch.object(cover, "async_get_last_state", return_value=None):
             with patch.object(cover, "async_write_ha_state"):
-                with patch(
-                    "homeassistant.helpers.issue_registry.async_create_issue"
-                ):
+                with patch("homeassistant.helpers.issue_registry.async_create_issue"):
                     await cover.async_added_to_hass()
 
-    # Exactly ONE entry for REM001 in _remote_to_motor — no stale duplicate
-    assert "REM001" in api._remote_to_motor
-    assert len([k for k in api._remote_to_motor if k == "REM001"]) == 1
-    # Must map to the correct motor (dict[str, str]: remote_id -> motor_id)
-    assert api._remote_to_motor["REM001"] == "MOT001"
+    # Exactly ONE entry for REM001 in _remote_to_motor — no stale duplicate.
+    # Key is (remote_enum, remote_id); legacy bind has remote_enum=None (Plan 01).
+    assert (None, "REM001") in api._remote_to_motor
+    assert len([k for k in api._remote_to_motor if k == (None, "REM001")]) == 1
+    # Must map to the correct motor (dict[tuple, str]: (enum,id) -> motor_id)
+    assert api._remote_to_motor[(None, "REM001")] == "MOT001"
 
 
 # ---------------------------------------------------------------------------

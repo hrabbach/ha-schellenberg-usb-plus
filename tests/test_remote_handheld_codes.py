@@ -77,16 +77,14 @@ async def test_remote_down_frame_starts_close(hass: HomeAssistant) -> None:
     remote command" else branch and left is_closing False.
     """
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
-    api.register_remote(_REMOTE_ID, _MOTOR_ID, _MOTOR_ENUM)
+    api.register_remote(_REMOTE_ID, _MOTOR_ENUM, _MOTOR_ID, _MOTOR_ENUM)
     cover = _build_cover(hass, api)
     cover._attr_current_cover_position = 80
 
     # Real subscription must register — do NOT patch async_dispatcher_connect.
     with patch.object(cover, "async_get_last_state", return_value=None):
         with patch.object(cover, "async_write_ha_state"):
-            with patch(
-                "homeassistant.helpers.issue_registry.async_create_issue"
-            ):
+            with patch("homeassistant.helpers.issue_registry.async_create_issue"):
                 await cover.async_added_to_hass()
 
     with patch.object(cover, "_start_position_tracking"):
@@ -106,15 +104,13 @@ async def test_remote_up_frame_starts_open(hass: HomeAssistant) -> None:
     remote command" else branch.
     """
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
-    api.register_remote(_REMOTE_ID, _MOTOR_ID, _MOTOR_ENUM)
+    api.register_remote(_REMOTE_ID, _MOTOR_ENUM, _MOTOR_ID, _MOTOR_ENUM)
     cover = _build_cover(hass, api)
     cover._attr_current_cover_position = 20
 
     with patch.object(cover, "async_get_last_state", return_value=None):
         with patch.object(cover, "async_write_ha_state"):
-            with patch(
-                "homeassistant.helpers.issue_registry.async_create_issue"
-            ):
+            with patch("homeassistant.helpers.issue_registry.async_create_issue"):
                 await cover.async_added_to_hass()
 
     with patch.object(cover, "_start_position_tracking"):
@@ -134,7 +130,7 @@ async def test_remote_stop_frame_latches(hass: HomeAssistant) -> None:
     remote command" else branch and never stopped tracking or latched.
     """
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
-    api.register_remote(_REMOTE_ID, _MOTOR_ID, _MOTOR_ENUM)
+    api.register_remote(_REMOTE_ID, _MOTOR_ENUM, _MOTOR_ID, _MOTOR_ENUM)
     cover = _build_cover(hass, api)
     cover._attr_is_opening = True
     cover._move_start_time = 12300.0
@@ -142,9 +138,7 @@ async def test_remote_stop_frame_latches(hass: HomeAssistant) -> None:
 
     with patch.object(cover, "async_get_last_state", return_value=None):
         with patch.object(cover, "async_write_ha_state"):
-            with patch(
-                "homeassistant.helpers.issue_registry.async_create_issue"
-            ):
+            with patch("homeassistant.helpers.issue_registry.async_create_issue"):
                 await cover.async_added_to_hass()
 
     with patch.object(cover, "_stop_position_tracking") as mock_stop:
@@ -182,6 +176,7 @@ def _make_event_entity(
         device_id=_MOTOR_ID,
         device_enum=_MOTOR_ENUM,
         remote_id=_REMOTE_ID,
+        remote_enum=None,
     )
 
 
@@ -206,7 +201,7 @@ def test_handheld_code_fires_event(
     """
     entity = _make_event_entity(event_api)
     fired: list[str] = []
-    entity._trigger_event = lambda et: fired.append(et)  # type: ignore[method-assign]
+    entity._trigger_event = lambda et: fired.append(et)  # type: ignore[misc, assignment, method-assign]
     entity.async_write_ha_state = MagicMock()  # type: ignore[method-assign]
 
     entity._on_remote_event(command, 0.0)

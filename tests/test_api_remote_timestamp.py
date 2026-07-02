@@ -27,7 +27,7 @@ async def test_remote_event_carries_receive_timestamp(hass: HomeAssistant) -> No
     The command byte stays in position 2 unchanged; receive_timestamp is position 3.
     """
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
-    api.register_remote("REM001", "MOT001", "10")
+    api.register_remote("REM001", "10", "MOT001", "10")
 
     with patch(
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
@@ -36,9 +36,7 @@ async def test_remote_event_carries_receive_timestamp(hass: HomeAssistant) -> No
 
         calls = [c[0] for c in mock_send.call_args_list]
         # Find the SIGNAL_REMOTE_EVENT call
-        remote_call = next(
-            c for c in calls if c[1] == f"{SIGNAL_REMOTE_EVENT}_MOT001"
-        )
+        remote_call = next(c for c in calls if c[1] == f"{SIGNAL_REMOTE_EVENT}_MOT001")
         # Must have 4 positional args: (hass, signal, command, receive_timestamp)
         assert len(remote_call) >= 4, (
             f"Expected >= 4 positional args on SIGNAL_REMOTE_EVENT, got {len(remote_call)}"
@@ -59,7 +57,7 @@ async def test_device_event_payload_unchanged(hass: HomeAssistant) -> None:
     SIGNAL_DEVICE_EVENT sends in the same Gate-3 block.
     """
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
-    api.register_remote("REM001", "MOT001", "10")
+    api.register_remote("REM001", "10", "MOT001", "10")
 
     with patch(
         "custom_components.schellenberg_usb.api.async_dispatcher_send"
@@ -67,9 +65,7 @@ async def test_device_event_payload_unchanged(hass: HomeAssistant) -> None:
         api._handle_message("ss10REM00101ABCDPP00")
 
         calls = [c[0] for c in mock_send.call_args_list]
-        device_calls = [
-            c for c in calls if c[1].startswith(f"{SIGNAL_DEVICE_EVENT}_")
-        ]
+        device_calls = [c for c in calls if c[1].startswith(f"{SIGNAL_DEVICE_EVENT}_")]
         assert len(device_calls) == 2, (
             f"Expected exactly 2 SIGNAL_DEVICE_EVENT dispatches, got {len(device_calls)}"
         )
@@ -92,22 +88,23 @@ async def test_receive_timestamp_is_monotonic_epoch(hass: HomeAssistant) -> None
     This proves the timestamp uses the same monotonic epoch as PositionTracker.calculate.
     """
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
-    api.register_remote("REM001", "MOT001", "10")
+    api.register_remote("REM001", "10", "MOT001", "10")
 
     sentinel = 54321.0
 
-    with patch(
-        "custom_components.schellenberg_usb.api.async_dispatcher_send"
-    ) as mock_send, patch(
-        "custom_components.schellenberg_usb.api.time.monotonic",
-        return_value=sentinel,
+    with (
+        patch(
+            "custom_components.schellenberg_usb.api.async_dispatcher_send"
+        ) as mock_send,
+        patch(
+            "custom_components.schellenberg_usb.api.time.monotonic",
+            return_value=sentinel,
+        ),
     ):
         api._handle_message("ss10REM00101ABCDPP00")
 
         calls = [c[0] for c in mock_send.call_args_list]
-        remote_call = next(
-            c for c in calls if c[1] == f"{SIGNAL_REMOTE_EVENT}_MOT001"
-        )
+        remote_call = next(c for c in calls if c[1] == f"{SIGNAL_REMOTE_EVENT}_MOT001")
         assert len(remote_call) >= 4, (
             "receive_timestamp (c[3]) not present on SIGNAL_REMOTE_EVENT"
         )

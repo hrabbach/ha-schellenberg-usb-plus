@@ -173,6 +173,14 @@
             "listen_first": "Try again"
           }
         },
+        "listen_confirm_migrate": {
+          "title": "Add channel to {device_name}?",
+          "description": "Remote **{remote_id}** was detected twice. Its other channel currently controls **{other_motor_name}**, which will keep working. Add this channel to {device_name}?",
+          "menu_options": {
+            "listen_confirm_apply": "Add channel",
+            "listen_first": "Try again"
+          }
+        },
         "remove_confirm": {
           "title": "Remove remote from {device_name}?",
           "description": "This will remove the remote binding from {device_name}. The remote event entity will disappear and position tracking triggered by that remote will stop.",
@@ -195,7 +203,7 @@
         "timed_cal_too_short": "Run was too short (less than 2 seconds) — likely a double-press or misfire. Please return the shutter to the fully open position via your remote, then try again.",
         "timed_cal_too_long": "Run exceeded 120 seconds — the shutter may have been left running. Please return the shutter to the fully open position via your remote, then try again within 2 minutes.",
         "remote_is_motor": "That button is registered to a motor, not a remote — choose a different button.",
-        "remote_already_bound": "That remote is already bound to {other_motor_name} — unbind it there first.",
+        "remote_already_bound": "That remote button is already bound to {other_motor_name} — unbind it there first, then try again.",
         "remote_press_mismatch": "The two presses did not match — please try again.",
         "remote_capture_timeout": "No remote detected — press a button within the listening window.",
         "remote_capture_disconnected": "The USB stick disconnected — reconnect and try again.",
