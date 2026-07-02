@@ -23,6 +23,7 @@ A Home Assistant custom integration that controls Schellenberg roller-shutter mo
 - **Time-based position tracking** — open/close times measured via a built-in calibration flow; drive-to-percentage works on any calibrated motor
 - **Auto-pairing** — put the stick into pairing mode from the HA UI; press the pairing button on the motor within 2 minutes
 - **Manual add** — add motors already paired by other remotes, or non-bidirectional motors, by entering a two-character hex enumerator: a user-chosen id that the stick uses to address that motor
+- **Bind a physical remote** — from a motor's **Configure** screen, bind a handheld remote by pressing its button twice; the remote then drives best-effort position tracking and a Home Assistant event entity for that motor. A multi-channel remote can bind each of its channels to a different motor independently — binding a second channel no longer collides with the first
 - **USB auto-discovery** — HA detects the stick on plug-in (USB VID `16C0` / PID `05E1`, manufacturer `van ooijen`) and pre-fills the serial port
 - **Stick status sensors** — connection status, firmware version, and operating mode
 - **LED switch** — toggle the USB stick LED on/off from HA
@@ -106,6 +107,8 @@ To add a silent motor you first perform **wireless delegation pairing** outside 
 #### Remote-driven position tracking (best-effort)
 
 When a timed motor has a bound physical remote registered in Home Assistant, the integration tracks position updates triggered by that remote. Because timed motors give no movement confirmation, this tracking is time-based and approximate — the position shown in HA reflects elapsed time since the button press, not a confirmed motor state. The position self-corrects the next time you open or close the motor through Home Assistant directly. If a remote press is missed (e.g. out of radio range), the position in HA will not update for that press.
+
+Bind a remote from the motor's **Configure** screen (**Bind a remote**): press any button on the remote, then press the same button again to confirm. A remote is identified by its channel *and* its hardware id, not the id alone — so each channel of a multi-channel handheld remote can be bound to a different motor. If the same remote's other channel is already bound to a different motor, Home Assistant shows an **Add channel** confirmation instead of rejecting the bind; the other motor's existing binding is left untouched.
 
 #### What is the device enumerator?
 
@@ -200,6 +203,7 @@ For each paired motor (subentry):
 | Entity type | Description |
 |-------------|-------------|
 | Cover | Open / close / stop / set position (position tracking requires calibration) |
+| Event | Only for timed (non-bidirectional) motors with a bound physical remote — fires on open, close, stop, and hold-up / hold-down remote button presses |
 
 ---
 

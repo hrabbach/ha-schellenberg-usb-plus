@@ -90,7 +90,7 @@ Calibration records how many seconds the motor takes to travel from fully closed
 
 The integration detects movement automatically — you control the motor with your physical remote during calibration.
 
-1. Open the device page for your motor and click **Calibrate** (or the integration launches calibration automatically right after auto-pairing).
+1. Open the device page for your motor and click **Configure**, then choose **Calibrate travel time** from the menu (or the integration launches calibration automatically right after auto-pairing).
 2. **Step 1 — Close:** Ensure the shutter is fully closed (all the way down), then press **Next**.
 3. **Step 2 — Open the blind:** Press **Start** in the dialog, then press the **open** button on your physical remote. The integration waits for the motor's "started moving up" event and begins timing automatically. Wait for the motor to reach the top endstop and stop. The integration detects the stop event and advances.
 4. **Step 3 — Close the blind:** Press **Start** in the dialog, then press the **close** button on your physical remote. The integration waits for the motor's "started moving down" event and begins timing automatically. Wait for the motor to reach the bottom endstop and stop.
@@ -102,7 +102,7 @@ Full model-specific pairing instructions are in [README — Device Pairing Instr
 
 The integration drives the motor itself and measures elapsed time between your button presses — no motor events are required.
 
-1. Open the device page for your motor and click **Calibrate**.
+1. Open the device page for your motor and click **Configure**, then choose **Calibrate travel time** from the menu.
 2. **Precondition step:** Confirm that the shutter is fully open (at the top) before proceeding, then press **Next**.
 3. **Close run:** The integration sends a close command automatically. Wait until the motor reaches the bottom endstop and stops on its own, then press **Submit**. (Valid travel: 2 – 120 seconds.)
 4. **Open run:** The integration sends an open command automatically. Wait until the motor reaches the top endstop and stops on its own, then press **Submit**.
@@ -123,9 +123,24 @@ From this point the entity works like any other HA cover: use it in automations,
 
 ---
 
+## Step 6 — Bind a remote (optional)
+
+You can bind a handheld physical remote to a motor so its button presses are recognized by Home Assistant. This is most useful for **timed (non-bidirectional) motors**: a bound remote drives best-effort, time-based position tracking and adds a remote-button event entity for that motor. (Bidirectional motors already track position from motor events and don't need this for positioning.)
+
+1. Open the device page for your motor, click **Configure**, and choose **Bind a remote** from the menu (shown when no remote is bound yet — motors with a remote already bound show **Change remote** / **Remove remote** instead).
+2. **First press:** Press any button on the remote you want to bind. The integration listens for up to 15 seconds.
+3. **Second press:** Press the *same* button again within 15 seconds to confirm. The two presses must match exactly, or the bind is rejected.
+4. **Confirm:** A dialog shows the captured remote id and asks you to confirm.
+   - Normally you'll see **Bind remote to \<motor>?** — click **Bind** to save, or **Try again** to recapture.
+   - If the remote is a **multi-channel** handheld and its other channel is already bound to a *different* motor, you instead see **Add channel to \<motor>?** — confirming adds this channel to the current motor while leaving the other motor's existing binding untouched.
+
+To change or remove a binding later, click **Configure** on the device and choose **Change remote** (repeats the same press-twice flow) or **Remove remote**.
+
+---
+
 ## Recalibrating
 
-If travel times change (motor replaced, mechanical adjustment, etc.), open the motor's device page and click **Calibrate** to run calibration again. Existing times are overwritten on confirmation.
+If travel times change (motor replaced, mechanical adjustment, etc.), open the motor's device page, click **Configure**, and choose **Calibrate travel time** to run calibration again. Existing times are overwritten on confirmation.
 
 ---
 
@@ -141,5 +156,10 @@ If travel times change (motor replaced, mechanical adjustment, etc.), open the m
 | Timed calibration rejects "too short" | Submitted before motor reached endstop | Wait for the motor to stop completely before pressing Submit |
 | Timed calibration rejects "too long" | More than 120 seconds elapsed before pressing Submit | Ensure the motor reaches the endstop promptly; avoid leaving the dialog idle |
 | Position drifts over time | Calibration times no longer accurate | Recalibrate from the device page |
+| Remote bind: "No remote detected" | Neither press was received within the 15-second window, or the stick disconnected | Move the remote closer and press firmly within 15 seconds of starting each press; check the stick connection if it persists |
+| Remote bind: "The two presses did not match" | A different button (or a different remote) was pressed the second time | Press the exact same button on the same remote for both presses |
+| Remote bind: "That button is registered to a motor, not a remote" | The captured signal matches an enrolled motor's id, not a handheld remote | Press a button on your physical remote, not a motor control |
+| Remote bind: "already bound to \<motor>" | That exact remote channel is already bound to a different motor | Remove the binding from the other motor first (Configure → Remove remote), or use a different remote/channel |
+| "Add channel to \<motor>?" appears instead of the normal bind confirmation | The remote is multi-channel and another of its channels is already bound to a different motor | Expected for multi-channel remotes — confirming adds only this channel; the other motor's binding is unaffected. Click Try again if you pressed the wrong remote |
 
 For configuration details (serial port, baud rate, subentry data) see [docs/CONFIGURATION.md](CONFIGURATION.md).
