@@ -73,6 +73,50 @@ All per-device values are persisted in `subentry.data`:
 | `device_enum` | — | 2-char uppercase hex enumerator |
 | `bidirectional` | `CONF_BIDIRECTIONAL` | Motor mode flag |
 | `initial_position` | `CONF_INITIAL_POSITION` | Seed position (timed motors only) |
+| `remote_id` | `CONF_REMOTE_ID` | 6-char hex device id of the bound handheld remote, or absent if unbound. See [Remote Binding](#remote-binding). |
+| `remote_enum` | `CONF_REMOTE_ENUM` | 2-char hex channel enum of the bound remote. Absent on legacy single-channel binds persisted before this field existed — consumers must treat a missing value as a wildcard, not require it. |
+
+---
+
+## Remote Binding
+
+A paired blind can optionally be bound to a handheld physical remote so its button presses are recognized as belonging to that motor. This is configured per-device via **Settings → Devices & Services → Schellenberg USB → {device} → Configure**.
+
+The reconfigure menu is adaptive based on current binding state:
+
+| State | Menu options |
+|-------|--------------|
+| No remote bound | `Calibrate`, `Bind a remote` |
+| Remote bound | `Calibrate`, `Change remote`, `Remove remote` |
+
+### Learn-by-Press Flow
+
+Binding and changing a remote both use the same double-press capture flow (`config_flow.py`):
+
+1. **First press** — the user presses any button on the remote; the integration listens for a raw `(enum, id)` frame.
+2. **Second press** — the user presses the same button again to confirm; the captured `(enum, id)` must match the first press exactly, or the bind is rejected with a mismatch error.
+3. **Confirm** — a menu shows the captured remote id and lets the user confirm (persist) or retry.
+
+Binding policy is enforced on the first captured press:
+
+| Case | Result |
+|------|--------|
+| Captured id belongs to a registered motor (not a remote) | Rejected — `remote_is_motor` |
+| Captured `(enum, id)` is already bound to a *different* motor's specific channel | Rejected — `remote_already_bound` |
+| Captured `(enum, id)` only collides with another motor's legacy wildcard `(None, id)` slot | Allowed as a sibling-channel bind (multi-channel remote) — routes to a migration confirm step |
+| Re-press of this motor's own current remote (change flow) | Allowed through to double-press verification |
+
+### Remote Identity: `(enum, id)`
+
+Remote identity is keyed on the pair **`(remote_enum, remote_id)`**, not on `remote_id` alone. Multi-channel remotes transmit the same 6-char hex `id` across every channel button but a different 2-char hex `enum` per channel — keying on `id` alone would collapse distinct channels of the same physical remote onto a single binding. A `remote_enum` of `None` (legacy binds persisted before this field existed) is treated as a wildcard that matches any channel of that `id`.
+
+### Timing Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `LEARN_REMOTE_TIMEOUT` | `30.0` seconds | Learn-window default timeout (not exposed in the UI) |
+| `LEARN_REMOTE_CAPTURE_TIMEOUT` | `15.0` seconds | Capture window for each individual press (first and second press each get their own independent window) |
+| `REMOTE_DEDUP_WINDOW` | `1.0` seconds | Quiet period used to collapse repeated RF frames from a single physical button press into one logical capture |
 
 ---
 
@@ -138,7 +182,13 @@ These values are fixed in the source and are not user-configurable:
 | `VERIFY_TIMEOUT` | `5` seconds | Timeout waiting for stick version/mode response |
 | `PAIRING_TIMEOUT` | `120` seconds | Timeout waiting for a pairing RF response |
 | `PAIRING_DEVICE_ENUM_START` | `0x10` | First enumerator assigned during auto-pairing |
-| `DEFAULT_TRAVEL_TIME` | `60.0` seconds | Position fallback when calibration is absent |
+| `MAX_DEVICE_ENUM` | `0xFF` | Inclusive upper bound for device enumerators (240 concurrent device slots from `0x10`–`0xFF`) |
+| `DEVICE_ID_TIMEOUT` | `5` seconds | Timeout waiting for a device-id response |
+| `DELEGATION_TIMEOUT` | `30` seconds | Timeout for the delegation-pairing handshake |
+| `DEFAULT_TRAVEL_TIME` | `60.0` seconds | Position fallback when calibration is absent (defined in `cover_position.py`) |
+| `LEARN_REMOTE_TIMEOUT` | `30.0` seconds | Learn-window default timeout (not UI-exposed) |
+| `LEARN_REMOTE_CAPTURE_TIMEOUT` | `15.0` seconds | Per-press capture window in the remote learn-by-press flow |
+| `REMOTE_DEDUP_WINDOW` | `1.0` seconds | Quiet period for collapsing repeated RF frames from one button press |
 
 ---
 
@@ -149,7 +199,7 @@ Source: `manifest.json`
 | Field | Value |
 |-------|-------|
 | Domain | `schellenberg_usb` |
-| Version | `1.1.0` |
+| Version | `1.3.0` |
 | Integration type | `hub` |
 | IoT class | `local_push` |
 | Requirement | `pyserial-asyncio-fast==0.16` |

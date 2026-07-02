@@ -134,3 +134,16 @@ When reporting a bug, include:
 - Steps to reproduce, expected behaviour, and actual behaviour.
 - Relevant log output (enable debug logging for `custom_components.schellenberg_usb` if
   possible).
+
+## Further Reading
+
+For more detail than this document covers:
+
+- [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) — prerequisites and first run.
+- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — full local development setup, including the
+  dual-venv (WSL + `.venv-win`) workflow.
+- [docs/TESTING.md](docs/TESTING.md) — test suite structure, coverage, and how to add new
+  tests.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system overview and component
+  responsibilities.
+- [docs/CONFIGURATION.md](docs/CONFIGURATION.md) — configuration options and settings.

@@ -77,28 +77,39 @@ wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenber
 
 ## Test Organization
 
-All tests live in `tests/`. The suite has approximately 262 tests across these files:
+All tests live in `tests/`. The suite has approximately 418 tests across 29 files:
 
 | File | What it covers |
 |------|----------------|
 | `test_api.py` | `SchellenbergUsbApi` initialization, device registration, connect/disconnect |
+| `test_api_delegation.py` | API-side delegation-pairing seam: `_delegation_future`, disconnect drain, `delegation_pair()`/`abort_delegation_pair()` handshake |
 | `test_api_extended.py` | Edge cases for the API: retry logic, stick-busy handling, futures, error paths |
 | `test_api_messages.py` | Protocol message parsing — frame decoding, device ID extraction, status messages |
 | `test_api_reliability.py` | Safe future resolution, disconnect future drain, `_safe_resolve_future` helper, device enum slot allocation |
+| `test_api_remote_routing.py` | Remote event routing in the API: dedup window, triple dispatch, learn-window register/unregister |
+| `test_api_remote_timestamp.py` | `SIGNAL_REMOTE_EVENT` receive-timestamp widening — 4th positional arg captured via `time.monotonic()` at frame-decode time |
 | `test_api_robustness.py` | Bounded FIFO retry queue, frozen-stick heartbeat worker, exponential reconnect backoff |
+| `test_config_flow.py` | Blind subentry manual-add flow, serial port validation, config entry creation |
 | `test_const.py` | Constants and type aliases exported from `const.py` |
 | `test_cover.py` | `SchellenbergCover` entity: open/close/set position, calibration, position tracking |
 | `test_cover_position.py` | `PositionTracker` pure-core math: opening/closing position calculation, clamping, divide-by-zero guard |
-| `test_config_flow.py` | Blind subentry manual-add flow, serial port validation, config entry creation |
+| `test_cover_remote_tracking.py` | Cover entity position tracking driven by remote-initiated manual up/down commands |
+| `test_delegation_pairing.py` | Delegation-pairing subentry flow — pairing a new motor via an already-bound remote |
+| `test_event_entity.py` | Remote button event entity: command-to-event-type mapping, entity registration |
+| `test_event_platform.py` | Event platform setup guards and entity creation from subentries |
 | `test_init.py` | `__init__.py` setup/teardown, subentry wiring, platform forwarding |
 | `test_init_extended.py` | Edge cases for integration lifecycle: reload, subentry changes, error handling |
+| `test_learn_by_press_flow.py` | Learn-by-press remote binding flow: capture/confirm/retry, binding policy (motor/already-bound rejection), persistence |
+| `test_multi_channel_remote_binding.py` | Multi-channel remote binding keyed on `(enum, id)`: bind seam, frame-level routing/dedup, persisted config |
 | `test_options_flow.py` | Hub options flow (`ignore_unknown` toggle, serial port change) |
+| `test_quality_gate_tooling.py` | Regression guards for quality-gate invariants: no `.pre-commit-config.yaml`, codespell in `pyproject.toml`, CONTRIBUTING.md documents all four gate tools |
+| `test_remote_handheld_codes.py` | Regression: real captured handheld-remote frames decode to 00/01/02 and drive cover tracking + event firing |
 | `test_repairs.py` | Repairs platform: `async_create_fix_flow`, `UncalibratedMotorRepairFlow`, confirm form placeholders |
 | `test_sensor.py` | Sensor entities: stick connection status, firmware version, device mode |
 | `test_switch.py` | `SchellenbergLedSwitch` entity: on/off commands, state reporting |
-| `test_timed_calibration_flow.py` | Timed calibration flow: happy path, guard conditions (too short/too long) |
 | `test_timed_cal_handler_structure.py` | Structural tests for `TimedCalibrationFlowHandler` interface and guard constants |
-| `test_quality_gate_tooling.py` | Regression guards for quality-gate invariants: no `.pre-commit-config.yaml`, codespell in `pyproject.toml`, CONTRIBUTING.md documents all four gate tools |
+| `test_timed_calibration_flow.py` | Timed calibration flow: happy path, guard conditions (too short/too long) |
+| `test_translations_parity.py` | Translation key-parity gate: `strings.json` vs. every locale file, bidirectional key match, menu/step structure checks |
 
 ### Shared Fixtures (`conftest.py`)
 
@@ -126,6 +137,9 @@ addopts = """
 --cov=custom_components"""
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    "ignore:Inheritance class CountingClientSession from ClientSession is discouraged:DeprecationWarning",
+]
 ```
 
 Key settings:
@@ -133,6 +147,7 @@ Key settings:
 - `--strict-markers` — unregistered pytest marks cause an error
 - `--cov=custom_components` — coverage measured over `custom_components/`
 - `asyncio_mode = "auto"` — all `async def` test functions are treated as asyncio tests automatically
+- `filterwarnings` — silences a known `DeprecationWarning` from `pytest-homeassistant-custom-component`'s `ClientSession` subclass
 
 ## Coverage
 

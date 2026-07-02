@@ -245,6 +245,12 @@ custom_components/schellenberg_usb/
 │                                     # open/close/stop/set-position commands
 ├── cover_position.py                 # PositionTracker — pure travel-time/position
 │                                     # math, no HA dependencies
+├── event.py                          # Event platform setup; creates a remote-button
+│                                     # event entity per timed (non-bidirectional)
+│                                     # motor with a bound remote
+├── event_entity.py                   # SchellenbergRemoteEventEntity; fires HA events
+│                                     # (up/down/stop/hold_up/hold_down) from
+│                                     # SIGNAL_REMOTE_EVENT dispatcher signals
 ├── options_flow.py                   # Hub options (change serial port)
 ├── options_flow_calibration.py       # Manual open/close time measurement flow
 ├── options_flow_pairing.py           # Device pairing workflow and subentry creation
@@ -253,7 +259,10 @@ custom_components/schellenberg_usb/
 │                                     # directs user to run timed calibration
 ├── sensor.py                         # USB stick status sensors
 ├── switch.py                         # LED switch entity
+├── icons.json                        # Entity/service icon overrides
 ├── manifest.json                     # Integration metadata and version
+├── services.yaml                     # `pair` service definition (activates stick
+│                                     # pairing mode)
 ├── strings.json                      # UI string keys
 └── translations/                     # Localized UI strings
 
