@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   ### Removed       — removed features
 -->
 
+### Fixed
+
+- After upgrading from a version that predates the hub sub-entry, the USB stick's hub device is no longer left belonging to two sub-entries at once — something Home Assistant now rejects, which could stop the integration from starting. The leftover association is cleaned up automatically on the next start; no user action is needed, and your devices, entities, and calibration are untouched. ([#40](https://github.com/hrabbach/schellenberg_usb/issues/40))
+
 ## [1.3.0] - 2026-07-02
 
 ### Fixed

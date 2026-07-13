@@ -358,9 +358,7 @@ async def test_pre_subentry_hub_device_migrates_to_hub_subentry_only(
     assert hub_device is not None
 
     hub_subentry = next(
-        s
-        for s in entry.subentries.values()
-        if s.subentry_type == SUBENTRY_TYPE_HUB
+        s for s in entry.subentries.values() if s.subentry_type == SUBENTRY_TYPE_HUB
     )
 
     # Exact equality: the stale `None` association must be gone, leaving
@@ -415,9 +413,7 @@ async def test_fresh_install_hub_device_has_single_subentry_association(
     assert hub_device is not None
 
     hub_subentry = next(
-        s
-        for s in entry.subentries.values()
-        if s.subentry_type == SUBENTRY_TYPE_HUB
+        s for s in entry.subentries.values() if s.subentry_type == SUBENTRY_TYPE_HUB
     )
 
     assert hub_device.config_entries_subentries[entry.entry_id] == {
@@ -480,9 +476,7 @@ async def test_setup_entry_is_idempotent_across_restarts(
 
     # The hub subentry must not have been duplicated by the second setup.
     hub_subentries = [
-        s
-        for s in entry.subentries.values()
-        if s.subentry_type == SUBENTRY_TYPE_HUB
+        s for s in entry.subentries.values() if s.subentry_type == SUBENTRY_TYPE_HUB
     ]
     assert len(hub_subentries) == 1
 
