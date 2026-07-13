@@ -203,7 +203,7 @@ For each paired motor (subentry):
 | Entity type | Description |
 |-------------|-------------|
 | Cover | Open / close / stop / set position (position tracking requires calibration) |
-| Event | Only for timed (non-bidirectional) motors with a bound physical remote — fires on open, close, stop, and hold-up / hold-down remote button presses |
+| Event | Only for timed (non-bidirectional) motors with a bound physical remote — fires `up`, `down`, `stop`, `hold_up`, `hold_down` for each remote button press |
 
 ---
 

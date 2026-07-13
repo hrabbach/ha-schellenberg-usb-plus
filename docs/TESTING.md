@@ -1,7 +1,7 @@
 <!-- generated-by: gsd-doc-writer -->
 # Testing
 
-This document covers how to run and extend the test suite for the Schellenberg USB integration. See [docs/DEVELOPMENT.md](DEVELOPMENT.md) for the broader local development setup.
+This document covers how to run and extend the test suite for the Schellenberg USB integration. See [docs/DEVELOPMENT.md](DEVELOPMENT.md) for the broader local development setup and [CONTRIBUTING.md](../CONTRIBUTING.md) for the canonical quality-gate commands (pytest, ruff, mypy, codespell).
 
 ## Why Tests Run in WSL Only
 
@@ -77,7 +77,7 @@ wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenber
 
 ## Test Organization
 
-All tests live in `tests/`. The suite has approximately 418 tests across 29 files:
+All tests live in `tests/`. The suite has 421 tests across 29 files (419 test functions, one of which is `@pytest.mark.parametrize`d into 3 collected cases):
 
 | File | What it covers |
 |------|----------------|
@@ -111,6 +111,22 @@ All tests live in `tests/`. The suite has approximately 418 tests across 29 file
 | `test_timed_calibration_flow.py` | Timed calibration flow: happy path, guard conditions (too short/too long) |
 | `test_translations_parity.py` | Translation key-parity gate: `strings.json` vs. every locale file, bidirectional key match, menu/step structure checks |
 
+### Test Harness
+
+- **pytest** with **pytest-homeassistant-custom-component** (pinned in `pyproject.toml`, currently `==0.13.316`) supplies the `hass: HomeAssistant` fixture and the rest of the Home Assistant test scaffolding.
+- **pytest-asyncio** (`asyncio_mode = "auto"`) — every `async def test_...` runs as an asyncio test without needing `@pytest.mark.asyncio`.
+- **pytest-cov** — measures coverage over `custom_components/` (see [Coverage](#coverage) below).
+- **pytest-timeout** and **pytest-xdist** — both pulled in transitively via `pytest-homeassistant-custom-component`; `-n4` (xdist) parallelizes across 4 workers. `pytest-timeout` is available for any test run that needs a hang guard (e.g. `--timeout=30`) but no default timeout is set in `addopts`.
+- **freezegun** — used where tests need to control wall-clock time deterministically.
+
+### HA Registries and Config Entries
+
+Several tests exercise real Home Assistant registry behavior rather than mocking it: `tests/test_cover.py`, `tests/test_init.py`, `tests/test_init_extended.py`, `tests/test_config_flow.py`, `tests/test_delegation_pairing.py`, and `tests/test_multi_channel_remote_binding.py` call `homeassistant.helpers.device_registry.async_get(hass)` / `entity_registry.async_get(hass)` and assert against the entries those real registries return — the registries themselves are not mocked, only the serial layer underneath the integration is. Config entries are set up via `MockConfigEntry` (from `pytest-homeassistant-custom-component`) added to `hass` and set up with `async_setup_entry` the same way Home Assistant would.
+
+### Fake Serial Transport
+
+The API layer never touches a real serial port in tests. `serial_asyncio_fast.create_serial_connection` (the actual dependency in `pyproject.toml` is `pyserial-asyncio-fast`) is patched with `unittest.mock.patch(..., new_callable=AsyncMock)`, returning a `MagicMock` transport that is assigned to `api._transport`. Protocol-level tests then feed raw bytes/frames directly into `SchellenbergUsbApi`'s message handling and assert on calls made to the mock transport and on dispatcher signals fired as a result.
+
 ### Shared Fixtures (`conftest.py`)
 
 - `mock_serial_port` — returns `/dev/ttyUSB0` as a fixture string
@@ -122,6 +138,16 @@ All tests live in `tests/`. The suite has approximately 418 tests across 29 file
 ### Test File Naming Convention
 
 Test files follow `test_<module>.py` naming. For extended coverage of a module, a companion `test_<module>_extended.py` file is used. Structural or RED-phase tests use `test_<feature>_structure.py`.
+
+## Continuous Integration
+
+The `Build & Test` workflow (`.github/workflows/build-test.yaml`) runs on every push to any branch, on every pull request, on a daily schedule (`0 0 * * *`), and on manual dispatch. It has three jobs, all on `ubuntu-latest`:
+
+- **Hassfest validate** — runs `home-assistant/actions/hassfest` against the integration manifest.
+- **HACS validate** — runs `hacs/action` in `integration` category mode.
+- **Run tests** — sets up Python from `pyproject.toml`, installs `uv`, runs `uv sync --locked --all-extras --dev`, then `uv run pytest` (no extra flags; the suite's own `pyproject.toml` `addopts` apply).
+
+Because CI runs on Linux directly (no WSL indirection needed there), it does not use `.wsl_exec.sh` — that helper exists solely to make the WSL/Windows split workable for local development.
 
 ## Test Configuration
 
@@ -215,4 +241,5 @@ codespell is configured in `[tool.codespell]` in `pyproject.toml` with a domain-
 - Use `hass: HomeAssistant` as a fixture parameter — it is provided by `pytest-homeassistant-custom-component`.
 - For subentry flows, enter the flow via `hass.config_entries.subentries.async_init(...)`, not `async_step_<type>` directly (the HA framework routes through `async_step_user` first).
 - Place shared fixtures in `tests/conftest.py`.
-- Patch serial I/O using the `mock_serial` fixture or `unittest.mock.patch("serial.Serial")`.
+- Patch serial I/O using the `mock_serial` fixture or `unittest.mock.patch("serial.Serial")` (config flow) / `unittest.mock.patch("serial_asyncio_fast.create_serial_connection")` (API layer — see [Fake Serial Transport](#fake-serial-transport)).
+- **Keep time assertions clock-relative.** Several tests read `loop.time()` or `time.monotonic()` (e.g. `tests/test_api_robustness.py`, `tests/test_api_remote_timestamp.py`, `tests/test_cover_position.py`). A test that asserts an *absolute* monotonic value can pass for months on a long-uptime dev box and then fail the moment it runs on a fresh CI runner, where `time.monotonic()`/`loop.time()` starts much closer to zero. Always compute deltas relative to a value captured at the start of the test, never compare against a hardcoded absolute number.
