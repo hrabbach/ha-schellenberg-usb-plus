@@ -48,7 +48,7 @@ The hub entry is now created and the stick connects automatically. For serial po
 
 ## Step 3 — Add a motor
 
-Go to **Settings → Devices & Services**, find **Schellenberg USB+**, and click **+ Add device**. A menu offers two paths:
+Go to **Settings → Devices & Services**, find **Schellenberg USB+**, and click **+ Add device**. A menu offers three paths:
 
 ### Option A — Auto-pair (motor is nearby and reachable)
 
@@ -61,14 +61,14 @@ Use this when the motor has never been paired to the USB stick and is within rad
 
 ### Option B — Manual add (motor is already paired to the stick)
 
-Use this when the motor was paired to the USB stick by hand before you installed this integration, or when the motor never sends events back (non-bidirectional / timed motors).
+Use this when the motor was paired to the USB stick by hand before you installed this integration (for example via the raw wireless delegation procedure in [README — Device Pairing Instructions](../README.md#device-pairing-instructions)), or when you already know the exact enumerator a motor listens to.
 
-> **Motors already paired only to a physical remote (not to the stick):** The in-app **Pair automatically** flow waits for the motor to transmit its device ID over RF. A silent, non-bidirectional motor that was only ever paired to a physical remote will never do this and will always time out. You need to perform the **wireless delegation pairing** procedure first — see [README — Device Pairing Instructions](../README.md#device-pairing-instructions) for the step-by-step walkthrough — then return here and enter the chosen enumerator via **Add manually**.
+> **Motor already paired only to a physical remote (not to the stick), and you haven't run a raw delegation procedure yourself?** Use **Option C — Delegate** below instead of this option. It performs the handshake for you from the HA UI and assigns the enumerator automatically — you don't need to choose or enter one.
 
 1. Choose **Add manually (already paired)**.
-2. Enter the **device enumerator** — a user-chosen two-character hex id (e.g. `10`, `11`, `1A`) that the stick uses to address this motor. This is not an address the motor already has; it is assigned when the motor is paired to the stick:
+2. Enter the **device enumerator** — a two-character hex id (e.g. `10`, `11`, `1A`) that the stick uses to address this motor. This is not an address the motor already has; it is assigned when the motor is paired to the stick:
    - If you auto-paired this motor earlier using **Pair automatically**, the integration allocated it automatically (starting at `10` for the first motor). Check the HA device entry or the integration logs for the value it assigned.
-   - If you are completing a delegation pairing (see above), use the same hex value you sent in the delegation frames — that is the value to enter here.
+   - If you performed the raw wireless delegation procedure yourself (see README), use the same hex value you sent in the delegation frames — that is the value to enter here.
    - The value is case-insensitive and must be exactly two hex characters.
 3. Choose the motor type:
    - **Bidirectional motor** (toggle on, default) — motor sends movement events back to the stick (most ROLLODRIVE PREMIUM motors). Leave this toggled on.
@@ -77,6 +77,18 @@ Use this when the motor was paired to the USB stick by hand before you installed
 5. For timed motors only: set an **initial position** (0 = fully closed, 100 = fully open) that reflects where the shutter physically is right now. This seeds position tracking until calibration completes.
 
 The motor appears as a cover entity immediately after this step.
+
+### Option C — Delegate (motor already responds to a physical remote)
+
+Use this when the motor already responds to a physical Schellenberg remote but has never been paired to the USB stick. Unlike Option B, you don't need to know or choose an enumerator, and no raw serial commands are required — the integration does the handshake for you.
+
+1. Choose **Pair a motor that's already paired with a remote**.
+2. Put the motor into learn mode using its existing remote: press the remote's **P** (program) button, then press **Stop**. The motor jogs briefly to confirm it's in learn mode. Press **Next** in the dialog within 30 seconds.
+3. Click **Transmit**. The integration sends the pairing handshake to the motor; it jogs once more to acknowledge. The device ID and enumerator are captured and assigned automatically.
+4. Give the motor a friendly name (optional; defaults to `Blind <enum>`).
+5. Set an **initial position** reflecting where the shutter physically is right now. Because this is a silent handshake with no confirmation from the motor, test it afterward by pressing **Open** in Home Assistant — if the motor doesn't move, retry the delegate flow from Step 1.
+
+This always creates a **timed (non-bidirectional)** motor. Calibration is not offered as part of this flow — run it afterward from the device's **Configure → Calibrate travel time** menu (see Step 4B below).
 
 ---
 
@@ -153,6 +165,9 @@ If travel times change (motor replaced, mechanical adjustment, etc.), open the m
 | Auto-pair times out | Motor not in pairing mode, out of range, or Pair not clicked in time | Put motor in pairing mode first, then click Pair in the dialog; move the stick closer if needed |
 | `invalid_enum_format` error on manual add | Enumerator is not exactly two hex characters | Use values like `10`, `11`, `1A` — no prefix, no spaces |
 | `duplicate_enum` error on manual add | That enumerator is already used by another motor | Each motor must have a unique two-character hex enumerator |
+| Delegate: "Pairing command failed" | Stick was busy, disconnected, or the motor wasn't actually in learn mode | Confirm the motor jogged after pressing Stop, then click Transmit again |
+| Delegate: "Device limit reached" | All ~240 enumerator slots (`10`–`FF`) are already in use | Remove an unused motor before adding a new one |
+| Delegated motor doesn't move after adding | Silent handshake gives no confirmation; it may not have completed | Retry the delegate flow (Option C) from the beginning |
 | Timed calibration rejects "too short" | Submitted before motor reached endstop | Wait for the motor to stop completely before pressing Submit |
 | Timed calibration rejects "too long" | More than 120 seconds elapsed before pressing Submit | Ensure the motor reaches the endstop promptly; avoid leaving the dialog idle |
 | Position drifts over time | Calibration times no longer accurate | Recalibrate from the device page |

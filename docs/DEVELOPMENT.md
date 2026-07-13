@@ -194,11 +194,11 @@ canonical gate commands.
 
 ## Code Style
 
-- **Formatter:** ruff-format (configured in `pyproject.toml`)
-- **Linter:** ruff (rules configured in `pyproject.toml` `[tool.ruff.lint.pycodestyle]`)
+- **Formatter:** ruff-format ~=0.15.20 (configured in `pyproject.toml`)
+- **Linter:** ruff ~=0.15.20 (rules configured in `pyproject.toml` `[tool.ruff.lint.pycodestyle]`)
 - **Max line length:** 80 characters (`[tool.ruff.lint.pycodestyle]` in `pyproject.toml`)
-- **Type checker:** mypy 1.18.2+ (configured in `pyproject.toml` `[tool.mypy]`)
-- **Spell checker:** codespell 2.4.1+ (ignore-words list in `pyproject.toml` `[tool.codespell]`)
+- **Type checker:** mypy ~=2.1.0 (configured in `pyproject.toml` `[tool.mypy]`)
+- **Spell checker:** codespell ~=2.4.1 (ignore-words list in `pyproject.toml` `[tool.codespell]`)
 
 ### Key conventions
 

@@ -44,10 +44,11 @@ Each paired blind motor is a **subentry** under the hub. Subentries are added vi
 
 ### Add Methods
 
-| Method | Description |
-|--------|-------------|
-| **Pair automatically** | Put the stick into pairing mode and wait for a motor to respond over RF. The motor's device ID and enumerator are captured automatically. |
-| **Add manually** | Specify a user-chosen hex device enumerator (a 2-char id the stick uses to address this motor) for motors that were delegation-paired outside the integration or whose device ID is already known. |
+| Method | Menu label | Description |
+|--------|-----------|-------------|
+| **Pair automatically** | "Pair automatically" | Put the stick into pairing mode and wait for a motor to respond over RF. The motor's device ID and enumerator are captured automatically. |
+| **Add manually** | "Add manually (already paired)" | Specify a user-chosen hex device enumerator (a 2-char id the stick uses to address this motor) for motors that were delegation-paired outside the integration or whose device ID is already known. |
+| **Delegate** | "Pair a motor that's already paired with a remote" | For a motor that already responds to a physical remote: put the motor in learn mode (P-button, then Stop on the remote), then confirm within 30 seconds (`DELEGATION_TIMEOUT`). The stick performs a `CMD_PAIR` + `CMD_ALLOW_PAIRING` handshake (`api.delegation_pair()`) so the motor also learns the stick as a remote; device ID and enumerator are captured automatically. Always creates a **timed (non-bidirectional)** subentry — calibration is not offered inline and must be run afterward via reconfigure. |
 
 ### Manual-Add Fields
 
@@ -185,6 +186,7 @@ These values are fixed in the source and are not user-configurable:
 | `MAX_DEVICE_ENUM` | `0xFF` | Inclusive upper bound for device enumerators (240 concurrent device slots from `0x10`–`0xFF`) |
 | `DEVICE_ID_TIMEOUT` | `5` seconds | Timeout waiting for a device-id response |
 | `DELEGATION_TIMEOUT` | `30` seconds | Timeout for the delegation-pairing handshake |
+| `DELEGATION_BLINK_COUNT` | `3` blinks | Stick LED blinks shown as visual feedback during the delegation handshake window |
 | `DEFAULT_TRAVEL_TIME` | `60.0` seconds | Position fallback when calibration is absent (defined in `cover_position.py`) |
 | `LEARN_REMOTE_TIMEOUT` | `30.0` seconds | Learn-window default timeout (not UI-exposed) |
 | `LEARN_REMOTE_CAPTURE_TIMEOUT` | `15.0` seconds | Per-press capture window in the remote learn-by-press flow |
@@ -199,7 +201,7 @@ Source: `manifest.json`
 | Field | Value |
 |-------|-------|
 | Domain | `schellenberg_usb` |
-| Version | `1.3.0` |
+| Version | `1.3.1` |
 | Integration type | `hub` |
 | IoT class | `local_push` |
 | Requirement | `pyserial-asyncio-fast==0.16` |
