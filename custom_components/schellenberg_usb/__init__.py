@@ -109,6 +109,23 @@ async def async_setup_entry(
             add_config_entry_id=entry.entry_id,
             add_config_subentry_id=hub_subentry.subentry_id,
         )
+        # Drop the legacy "no subentry" (None) association left behind by
+        # versions that predate the hub subentry. Home Assistant now allows a
+        # device to belong to at most one config subentry (issue #40,
+        # home-assistant/core#175785), so leaving both would be invalid.
+        #
+        # This MUST be a second call: HA's _async_update_device derives both
+        # the add-result and the remove-result from the device's PRE-UPDATE
+        # association set, so merging them would subtract None from the
+        # pre-update {None}, end up with an empty set, drop the config-entry
+        # key, and delete the hub device outright. On installs that never had
+        # a None association this call is a deliberate no-op — it runs on
+        # every setup.
+        device_registry.async_update_device(
+            hub_device.id,
+            remove_config_entry_id=entry.entry_id,
+            remove_config_subentry_id=None,
+        )
 
     # Forward setup to the hub's platforms (cover, sensor, switch)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
