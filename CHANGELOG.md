@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   ### Removed       — removed features
 -->
 
+### Changed
+
+- Development tooling: the ruff lint rule selection is now pinned explicitly in `pyproject.toml` instead of relying on ruff's implicit default set, so a ruff upgrade can no longer silently change which rules the quality gate enforces. No effect on the integration's behaviour.
+
 ## [1.3.1] - 2026-07-13
 
 ### Fixed

@@ -70,6 +70,16 @@ warn_incomplete_stub = true
 warn_redundant_casts = true
 warn_unused_configs = true
 
+[tool.ruff.lint]
+# Pin the rule selection explicitly. Without this the project rides ruff's
+# implicit default set, which ruff expands between minor releases — 0.16.0
+# promoted a batch of SIM/RUF/UP/PL/S rules into the default and turned a
+# routine dependency bump into 102 new lint errors. These four groups are
+# exactly what ruff <=0.15.20 enforced by default, so behaviour is unchanged;
+# widening the set is now a deliberate edit here, not a side effect of an
+# upgrade.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.ruff.lint.pycodestyle]
 max-line-length = 80
 
