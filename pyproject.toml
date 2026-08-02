@@ -14,7 +14,7 @@ dev = [
 ]
 
 test = [
-    "croniter~=6.2.2",
+    "croniter~=6.2.4",
     "watchdog~=6.0.0",
     "mock-open~=1.4.0",
     "polyfactory~=3.3.0",
@@ -29,9 +29,9 @@ test = [
 ]
 
 lint = [
-    "codespell~=2.4.1",
-    "mypy~=2.1.0",
-    "ruff~=0.15.20",
+    "codespell~=2.4.3",
+    "mypy~=2.3.0",
+    "ruff~=0.16.0",
     "types-PyYAML~=6.0.12.20250915",
 ]
 
