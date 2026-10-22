@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
+from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,7 +19,11 @@ from custom_components.schellenberg_usb.const import (
     CMD_DOWN,
     CMD_STOP,
     CMD_UP,
+    HEARTBEAT_TRAFFIC_WINDOW,
 )
+
+_API_LOGGER = "custom_components.schellenberg_usb.api"
+_AGE_RE = re.compile(r"last_traffic_age_s=(\d+\.\d)")
 
 
 @pytest.mark.asyncio
@@ -598,6 +605,213 @@ def test_protocol_connection_lost_with_exception() -> None:
     protocol.connection_lost(exc)
 
     api.update_connection_status.assert_called_once_with(False)
+
+
+def _loss_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    """Return the 'connection lost' WARNING records from the api logger."""
+    return [
+        r
+        for r in caplog.records
+        if r.name == _API_LOGGER and "Serial port connection lost" in r.getMessage()
+    ]
+
+
+def _parsed_age(message: str) -> float:
+    """Extract the last_traffic_age_s value from a connection-lost message."""
+    match = _AGE_RE.search(message)
+    assert match is not None, message
+    return float(match.group(1))
+
+
+_PINNED_LOOP_TIME = 100_000.0
+
+
+@pytest.fixture
+def pinned_loop_clock(hass: HomeAssistant) -> Iterator[None]:
+    """Pin hass.loop.time() so clock-relative offsets stay positive.
+
+    hass.loop.time() is monotonic uptime; on a freshly booted machine a
+    "now minus N seconds" stamp can go negative, which the age helper reads
+    as the 'no traffic yet' sentinel (issue #50 test flake).
+    """
+    with patch.object(hass.loop, "time", return_value=_PINNED_LOOP_TIME):
+        yield
+
+
+@pytest.mark.asyncio
+async def test_connection_lost_after_heartbeat_close_is_local(
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+    pinned_loop_clock: None,
+) -> None:
+    """Frozen-stick heartbeat close is reported as initiator=local (issue #50)."""
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    mock_transport = MagicMock()
+    mock_transport.is_closing = MagicMock(return_value=False)
+    api._transport = mock_transport
+    api._is_connected = True
+    # Clock-relative: monotonic time can be tiny on a fresh CI runner.
+    api._last_traffic_time = hass.loop.time() - HEARTBEAT_TRAFFIC_WINDOW - 10
+    api._schedule_reconnect = MagicMock()  # type: ignore[method-assign]
+
+    with (
+        patch(
+            "custom_components.schellenberg_usb.api.asyncio.sleep",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(api, "verify_device", new=AsyncMock(return_value=False)),
+    ):
+        await asyncio.wait_for(api._heartbeat_worker(), timeout=1.0)
+
+    mock_transport.close.assert_called_once()
+    assert api._local_close_reason == "heartbeat_frozen"
+
+    protocol = SchellenbergProtocol(api._handle_message, api)
+    with caplog.at_level(logging.WARNING, logger=_API_LOGGER):
+        protocol.connection_lost(None)
+
+    records = _loss_records(caplog)
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert message.startswith("Serial port connection lost: None")
+    assert "initiator=local" in message
+    assert "cause=heartbeat_frozen" in message
+    assert _parsed_age(message) >= HEARTBEAT_TRAFFIC_WINDOW + 9
+
+
+@pytest.mark.asyncio
+async def test_connection_lost_unexpected_is_transport(
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+    pinned_loop_clock: None,
+) -> None:
+    """A close with no local cause recorded is initiator=transport (issue #50)."""
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    mock_transport = MagicMock()
+    mock_transport.is_closing = MagicMock(return_value=False)
+    api._transport = mock_transport
+    api._is_connected = True
+    api._last_traffic_time = hass.loop.time() - 42.0
+    schedule = MagicMock()
+    api._schedule_reconnect = schedule  # type: ignore[method-assign]
+
+    protocol = SchellenbergProtocol(api._handle_message, api)
+    with caplog.at_level(logging.WARNING, logger=_API_LOGGER):
+        protocol.connection_lost(OSError("device disconnected"))
+
+    records = _loss_records(caplog)
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert message.startswith("Serial port connection lost: device disconnected (")
+    assert "initiator=transport" in message
+    assert "cause=unknown" in message
+    assert 41.9 <= _parsed_age(message) <= 43.0
+
+    # Recovery is unchanged by the diagnostics.
+    assert api._transport is None
+    assert api._is_connected is False
+    schedule.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_connection_lost_unknown_age_sentinel(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """With no traffic ever stamped, the age is reported as 'unknown'."""
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    assert api._last_traffic_time == 0.0
+    api._schedule_reconnect = MagicMock()  # type: ignore[method-assign]
+
+    protocol = SchellenbergProtocol(api._handle_message, api)
+    with caplog.at_level(logging.WARNING, logger=_API_LOGGER):
+        protocol.connection_lost(None)
+
+    records = _loss_records(caplog)
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert "last_traffic_age_s=unknown" in message
+    assert "initiator=transport" in message
+
+
+@pytest.mark.asyncio
+async def test_connection_lost_after_disconnect_is_local(
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+    pinned_loop_clock: None,
+) -> None:
+    """disconnect() close is reported as initiator=local cause=disconnect."""
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    mock_transport = MagicMock()
+    api._transport = mock_transport
+    api._is_connected = True
+    api._last_traffic_time = hass.loop.time() - 12.0
+
+    await api.disconnect()
+
+    mock_transport.close.assert_called_once()
+    assert api._local_close_reason == "disconnect"
+
+    protocol = SchellenbergProtocol(api._handle_message, api)
+    with caplog.at_level(logging.WARNING, logger=_API_LOGGER):
+        protocol.connection_lost(None)
+
+    records = _loss_records(caplog)
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert "initiator=local" in message
+    assert "cause=disconnect" in message
+    assert 11.9 <= _parsed_age(message) <= 13.0
+    # disconnect() latched _closed, so no reconnect timer is armed.
+    assert api._reconnect_handle is None
+
+
+@pytest.mark.asyncio
+async def test_connect_verify_failed_is_local_and_clears_stale_cause(
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+    pinned_loop_clock: None,
+) -> None:
+    """Stale cause is cleared on a new transport; verify-failed close is local."""
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    # Leftover from an earlier connection.
+    api._local_close_reason = "heartbeat_frozen"
+    api._last_traffic_time = hass.loop.time() - 5.0
+
+    protocol = SchellenbergProtocol(api._handle_message, api)
+    mock_transport = MagicMock()
+    mock_transport.is_closing = MagicMock(return_value=False)
+    seen: list[str | None] = []
+
+    async def fake_verify(*_args: object, **_kwargs: object) -> bool:
+        seen.append(api._local_close_reason)
+        return False
+
+    with (
+        patch(
+            "serial_asyncio_fast.create_serial_connection",
+            new_callable=AsyncMock,
+        ) as mock_create,
+        patch.object(api, "verify_device", new=fake_verify),
+    ):
+        mock_create.return_value = (mock_transport, protocol)
+        await api.connect()
+
+    assert seen == [None]
+    mock_transport.close.assert_called_once()
+    assert api._local_close_reason == "verify_failed"
+    assert api._transport is None
+
+    schedule = MagicMock()
+    api._schedule_reconnect = schedule  # type: ignore[method-assign]
+    with caplog.at_level(logging.WARNING, logger=_API_LOGGER):
+        protocol.connection_lost(None)
+
+    records = _loss_records(caplog)
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert "initiator=local" in message
+    assert "cause=verify_failed" in message
+    schedule.assert_called_once()
 
 
 @pytest.mark.asyncio

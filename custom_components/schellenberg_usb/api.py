@@ -115,6 +115,10 @@ class SchellenbergUsbApi:
         # Heartbeat for frozen-stick detection
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._last_traffic_time: float = 0.0  # 0.0 sentinel; set on connect
+        # Issue #50 diagnostics: cause of the most recent close that this
+        # integration itself initiated. None means any connection_lost is
+        # transport-initiated (unplug, I/O error, driver drop).
+        self._local_close_reason: str | None = None
 
         # Reconnect backoff
         self._reconnect_attempts: int = 0
@@ -193,6 +197,26 @@ class SchellenbergUsbApi:
         self._reconnect_handle = None
         self.hass.async_create_task(self.connect())
 
+    def _connection_loss_context(self) -> str:
+        """Return diagnostic key=value context for a lost serial connection.
+
+        Diagnostic-only (issue #50): says whether this integration closed the
+        port itself (``initiator=local`` plus the recorded cause) or the
+        transport/OS did (``initiator=transport``), and how long it had been
+        since the last serial traffic. The age comes from
+        ``_last_traffic_time``, which is stamped by inbound frames and by
+        tracked outbound sends, hence the key name ``last_traffic_age_s``.
+        Side-effect free: it does not clear the recorded cause.
+        """
+        reason = self._local_close_reason
+        initiator = "local" if reason is not None else "transport"
+        cause = reason if reason is not None else "unknown"
+        if self._last_traffic_time > 0.0:
+            age = f"{self.hass.loop.time() - self._last_traffic_time:.1f}"
+        else:
+            age = "unknown"
+        return f"initiator={initiator} cause={cause} last_traffic_age_s={age}"
+
     def _schedule_reconnect(self) -> None:
         """Schedule a reconnect attempt via the shared backoff helper.
 
@@ -243,6 +267,13 @@ class SchellenbergUsbApi:
                 self.port,
                 baudrate=112500,
             )
+            # Issue #50 diagnostics: a NEW transport now exists, so any later
+            # connection_lost belongs to it and must not inherit a stale local
+            # cause. Safe to clear here: the previous transport's
+            # connection_lost has already run (asyncio delivers it on the next
+            # loop tick after close(); every local close is followed by the
+            # _closed teardown latch or a reconnect delay of >= 2.5 s).
+            self._local_close_reason = None
             _LOGGER.info("Successfully connected to Schellenberg USB stick")
 
             # Verify this is a Schellenberg device
@@ -251,6 +282,8 @@ class SchellenbergUsbApi:
                     "Device verification failed - not a Schellenberg USB stick"
                 )
                 if self._transport:
+                    # Issue #50 diagnostics: read by connection_lost.
+                    self._local_close_reason = "verify_failed"
                     self._transport.close()
                 self._transport = None
                 self._is_connected = False
@@ -754,6 +787,8 @@ class SchellenbergUsbApi:
                         # transport is synchronous (no await) so the single-tick
                         # self-cancel safety window is preserved (WR-01).
                         if self._transport is not None:
+                            # Issue #50 diagnostics: read by connection_lost.
+                            self._local_close_reason = "heartbeat_frozen"
                             self._transport.close()
                             self._transport = None
                         # Schedule reconnect through the shared single-flight
@@ -1611,6 +1646,8 @@ class SchellenbergUsbApi:
             self._stop_pairing_task = None
 
         if self._transport:
+            # Issue #50 diagnostics: read by connection_lost.
+            self._local_close_reason = "disconnect"
             self._transport.close()
             self._transport = None
             _LOGGER.info("Disconnected from Schellenberg USB stick")
@@ -1644,7 +1681,11 @@ class SchellenbergProtocol(asyncio.Protocol):
 
     def connection_lost(self, exc: Exception | None) -> None:
         """Called when the connection is lost."""
-        _LOGGER.warning("Serial port connection lost: %s", exc)
+        _LOGGER.warning(
+            "Serial port connection lost: %s (%s)",
+            exc,
+            self.api._connection_loss_context(),
+        )
         self.api.update_connection_status(False)
         # Clear the stale transport reference before scheduling so the
         # connect() re-entrancy guard cannot wedge on a transport that
