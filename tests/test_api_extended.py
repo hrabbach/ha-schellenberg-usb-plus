@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,7 +18,11 @@ from custom_components.schellenberg_usb.const import (
     CMD_DOWN,
     CMD_STOP,
     CMD_UP,
+    HEARTBEAT_TRAFFIC_WINDOW,
 )
+
+_API_LOGGER = "custom_components.schellenberg_usb.api"
+_AGE_RE = re.compile(r"last_traffic_age_s=(\d+\.\d)")
 
 
 @pytest.mark.asyncio
@@ -598,6 +604,113 @@ def test_protocol_connection_lost_with_exception() -> None:
     protocol.connection_lost(exc)
 
     api.update_connection_status.assert_called_once_with(False)
+
+
+def _loss_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    """Return the 'connection lost' WARNING records from the api logger."""
+    return [
+        r
+        for r in caplog.records
+        if r.name == _API_LOGGER and "Serial port connection lost" in r.getMessage()
+    ]
+
+
+def _parsed_age(message: str) -> float:
+    """Extract the last_traffic_age_s value from a connection-lost message."""
+    match = _AGE_RE.search(message)
+    assert match is not None, message
+    return float(match.group(1))
+
+
+@pytest.mark.asyncio
+async def test_connection_lost_after_heartbeat_close_is_local(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Frozen-stick heartbeat close is reported as initiator=local (issue #50)."""
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    mock_transport = MagicMock()
+    mock_transport.is_closing = MagicMock(return_value=False)
+    api._transport = mock_transport
+    api._is_connected = True
+    # Clock-relative: monotonic time can be tiny on a fresh CI runner.
+    api._last_traffic_time = hass.loop.time() - HEARTBEAT_TRAFFIC_WINDOW - 10
+    api._schedule_reconnect = MagicMock()  # type: ignore[method-assign]
+
+    with (
+        patch(
+            "custom_components.schellenberg_usb.api.asyncio.sleep",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(api, "verify_device", new=AsyncMock(return_value=False)),
+    ):
+        await asyncio.wait_for(api._heartbeat_worker(), timeout=1.0)
+
+    mock_transport.close.assert_called_once()
+    assert api._local_close_reason == "heartbeat_frozen"
+
+    protocol = SchellenbergProtocol(api._handle_message, api)
+    with caplog.at_level(logging.WARNING, logger=_API_LOGGER):
+        protocol.connection_lost(None)
+
+    records = _loss_records(caplog)
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert message.startswith("Serial port connection lost: None")
+    assert "initiator=local" in message
+    assert "cause=heartbeat_frozen" in message
+    assert _parsed_age(message) >= HEARTBEAT_TRAFFIC_WINDOW + 9
+
+
+@pytest.mark.asyncio
+async def test_connection_lost_unexpected_is_transport(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A close with no local cause recorded is initiator=transport (issue #50)."""
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    mock_transport = MagicMock()
+    mock_transport.is_closing = MagicMock(return_value=False)
+    api._transport = mock_transport
+    api._is_connected = True
+    api._last_traffic_time = hass.loop.time() - 42.0
+    schedule = MagicMock()
+    api._schedule_reconnect = schedule  # type: ignore[method-assign]
+
+    protocol = SchellenbergProtocol(api._handle_message, api)
+    with caplog.at_level(logging.WARNING, logger=_API_LOGGER):
+        protocol.connection_lost(OSError("device disconnected"))
+
+    records = _loss_records(caplog)
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert message.startswith("Serial port connection lost: device disconnected (")
+    assert "initiator=transport" in message
+    assert "cause=unknown" in message
+    assert 41.9 <= _parsed_age(message) <= 43.0
+
+    # Recovery is unchanged by the diagnostics.
+    assert api._transport is None
+    assert api._is_connected is False
+    schedule.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_connection_lost_unknown_age_sentinel(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """With no traffic ever stamped, the age is reported as 'unknown'."""
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    assert api._last_traffic_time == 0.0
+    api._schedule_reconnect = MagicMock()  # type: ignore[method-assign]
+
+    protocol = SchellenbergProtocol(api._handle_message, api)
+    with caplog.at_level(logging.WARNING, logger=_API_LOGGER):
+        protocol.connection_lost(None)
+
+    records = _loss_records(caplog)
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert "last_traffic_age_s=unknown" in message
+    assert "initiator=transport" in message
 
 
 @pytest.mark.asyncio
