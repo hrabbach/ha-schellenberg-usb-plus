@@ -57,7 +57,7 @@ Use this when the motor has never been paired to the USB stick and is within rad
 1. Choose **Pair automatically**.
 2. Put your motor into pairing mode (see [README — Device Pairing Instructions](../README.md#device-pairing-instructions) for button combinations by model).
 3. Click **Pair** in the dialog. The integration signals the stick to accept the next pairing message and waits up to 2 minutes for the motor to respond.
-4. When the motor responds, you are prompted to give it a friendly name. After naming, calibration starts immediately as the next step in the same dialog (Step 4A below).
+4. When the motor responds, you are prompted to give it a friendly name (left blank, it defaults to `Blind <device id>`). After naming, calibration starts immediately as the next step in the same dialog (Step 4A below).
 
 ### Option B — Manual add (motor is already paired to the stick)
 
@@ -66,7 +66,7 @@ Use this when the motor was paired to the USB stick by hand before you installed
 > **Motor already paired only to a physical remote (not to the stick), and you haven't run a raw delegation procedure yourself?** Use **Option C — Delegate** below instead of this option. It performs the handshake for you from the HA UI and assigns the enumerator automatically — you don't need to choose or enter one.
 
 1. Choose **Add manually (already paired)**.
-2. Enter the **device enumerator** — a two-character hex id (e.g. `10`, `11`, `1A`) that the stick uses to address this motor. This is not an address the motor already has; it is assigned when the motor is paired to the stick:
+2. Enter the **transmit address (hex)** (the device enumerator) — a two-character hex id (e.g. `10`, `11`, `1A`) that the stick uses to address this motor. This is not an address the motor already has; it is assigned when the motor is paired to the stick:
    - If you auto-paired this motor earlier using **Pair automatically**, the integration allocated it automatically (starting at `10` for the first motor). Check the HA device entry or the integration logs for the value it assigned.
    - If you performed the raw wireless delegation procedure yourself (see README), use the same hex value you sent in the delegation frames — that is the value to enter here.
    - The value is case-insensitive and must be exactly two hex characters.
@@ -76,7 +76,7 @@ Use this when the motor was paired to the USB stick by hand before you installed
 4. Optionally enter a friendly name; if left blank, the name defaults to `Blind <enum>`.
 5. For timed motors only: set an **initial position** (0 = fully closed, 100 = fully open) that reflects where the shutter physically is right now. This seeds position tracking until calibration completes.
 
-The motor appears as a cover entity immediately after this step.
+The motor appears as a cover entity immediately after this step. Calibration is not part of this flow for either motor type — run it afterward from the device's **Configure → Calibrate travel time** menu (see Step 4). Until then a timed motor uses a default 60-second travel time.
 
 ### Option C — Delegate (motor already responds to a physical remote)
 
@@ -94,7 +94,7 @@ This always creates a **timed (non-bidirectional)** motor. Calibration is not of
 
 ## Step 4 — Calibrate
 
-Calibration records how many seconds the motor takes to travel from fully closed to fully open (and back). Without it, position tracking and drive-to-percentage commands are unavailable.
+Calibration records how many seconds the motor takes to travel from fully closed to fully open (and back). Without it, position tracking is based on a default 60-second travel time and is inaccurate. Timed motors do not show the position slider until they are calibrated, and Home Assistant raises a Repairs notice ("is using the default travel time") for each uncalibrated timed motor; the notice points you back to **Configure** on the device.
 
 > **Note:** Calibration does NOT set motor end-stops. Physical travel limits must be configured on the motor itself using its built-in adjustment features or a Schellenberg remote before you calibrate here.
 
@@ -129,7 +129,7 @@ After calibration the shutter position is set to 100 % (fully open), matching wh
 Once calibrated, your motor appears in Home Assistant as a standard cover entity with:
 
 - **Open / Close / Stop** buttons
-- **Position slider** — drag to any percentage; the integration calculates travel time automatically
+- **Position slider** — drag to any percentage; the integration calculates travel time automatically (for timed motors, available once calibrated)
 
 From this point the entity works like any other HA cover: use it in automations, dashboards, and voice assistants.
 

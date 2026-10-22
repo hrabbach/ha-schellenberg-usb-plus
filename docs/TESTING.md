@@ -77,13 +77,13 @@ wsl -e env -u HOME -u WSLENV bash /mnt/c/Users/holger.rabbach/Coding/schellenber
 
 ## Test Organization
 
-All tests live in `tests/`. The suite has 421 tests across 29 files (419 test functions, one of which is `@pytest.mark.parametrize`d into 3 collected cases):
+All tests live in `tests/`. The suite has 426 collected tests across 29 files (424 test functions, one of which is `@pytest.mark.parametrize`d into 3 collected cases):
 
 | File | What it covers |
 |------|----------------|
 | `test_api.py` | `SchellenbergUsbApi` initialization, device registration, connect/disconnect |
 | `test_api_delegation.py` | API-side delegation-pairing seam: `_delegation_future`, disconnect drain, `delegation_pair()`/`abort_delegation_pair()` handshake |
-| `test_api_extended.py` | Edge cases for the API: retry logic, stick-busy handling, futures, error paths |
+| `test_api_extended.py` | Edge cases for the API: retry logic, stick-busy handling, futures, error paths, connection-lost diagnostics |
 | `test_api_messages.py` | Protocol message parsing — frame decoding, device ID extraction, status messages |
 | `test_api_reliability.py` | Safe future resolution, disconnect future drain, `_safe_resolve_future` helper, device enum slot allocation |
 | `test_api_remote_routing.py` | Remote event routing in the API: dedup window, triple dispatch, learn-window register/unregister |
@@ -117,11 +117,11 @@ All tests live in `tests/`. The suite has 421 tests across 29 files (419 test fu
 - **pytest-asyncio** (`asyncio_mode = "auto"`) — every `async def test_...` runs as an asyncio test without needing `@pytest.mark.asyncio`.
 - **pytest-cov** — measures coverage over `custom_components/` (see [Coverage](#coverage) below).
 - **pytest-timeout** and **pytest-xdist** — both pulled in transitively via `pytest-homeassistant-custom-component`; `-n4` (xdist) parallelizes across 4 workers. `pytest-timeout` is available for any test run that needs a hang guard (e.g. `--timeout=30`) but no default timeout is set in `addopts`.
-- **freezegun** — used where tests need to control wall-clock time deterministically.
+- **freezegun** — listed in the `test` dependency group, but the current tests do not import it; time-sensitive tests pin the loop clock or compute deltas relative to it (see [Writing New Tests](#writing-new-tests)).
 
 ### HA Registries and Config Entries
 
-Several tests exercise real Home Assistant registry behavior rather than mocking it: `tests/test_cover.py`, `tests/test_init.py`, `tests/test_init_extended.py`, `tests/test_config_flow.py`, `tests/test_delegation_pairing.py`, and `tests/test_multi_channel_remote_binding.py` call `homeassistant.helpers.device_registry.async_get(hass)` / `entity_registry.async_get(hass)` and assert against the entries those real registries return — the registries themselves are not mocked, only the serial layer underneath the integration is. Config entries are set up via `MockConfigEntry` (from `pytest-homeassistant-custom-component`) added to `hass` and set up with `async_setup_entry` the same way Home Assistant would.
+Several tests exercise real Home Assistant registry behavior rather than mocking it: `tests/test_cover.py`, `tests/test_init.py`, and `tests/test_init_extended.py` use the `homeassistant.helpers.device_registry` / `entity_registry` helpers and assert against the entries those real registries return — the registries themselves are not mocked, only the serial layer underneath the integration is. Those three files build real `ConfigEntry(...)` objects directly in their fixtures; `tests/test_config_flow.py`, `tests/test_delegation_pairing.py`, and `tests/test_multi_channel_remote_binding.py` instead use `MockConfigEntry` (from `pytest-homeassistant-custom-component`). Either way the entry is added to `hass` and set up the same way Home Assistant would.
 
 ### Fake Serial Transport
 
@@ -141,11 +141,12 @@ Test files follow `test_<module>.py` naming. For extended coverage of a module, 
 
 ## Continuous Integration
 
-The `Build & Test` workflow (`.github/workflows/build-test.yaml`) runs on every push to any branch, on every pull request, on a daily schedule (`0 0 * * *`), and on manual dispatch. It has three jobs, all on `ubuntu-latest`:
+The `Build & Test` workflow (`.github/workflows/build-test.yaml`) runs on every push to any branch, on every pull request, on a daily schedule (`0 0 * * *`), and on manual dispatch. It has four jobs, all on `ubuntu-latest`:
 
 - **Hassfest validate** — runs `home-assistant/actions/hassfest` against the integration manifest.
 - **HACS validate** — runs `hacs/action` in `integration` category mode.
-- **Run tests** — sets up Python from `pyproject.toml`, installs `uv`, runs `uv sync --locked --all-extras --dev`, then `uv run pytest` (no extra flags; the suite's own `pyproject.toml` `addopts` apply).
+- **Lint & type check** — sets up Python 3.14, installs `uv`, runs `uv sync --locked --all-extras --dev`, then `ruff check`, `ruff format --check`, `mypy` (over `custom_components/schellenberg_usb/` and `tests/`), and `codespell` (over `custom_components/schellenberg_usb/ tests/ README.md CONTRIBUTING.md`). The formatting, mypy, and codespell steps run even if an earlier step failed.
+- **Run tests** — sets up Python 3.14, installs `uv`, runs `uv sync --locked --all-extras --dev`, then `uv run pytest` (no extra flags; the suite's own `pyproject.toml` `addopts` apply).
 
 Because CI runs on Linux directly (no WSL indirection needed there), it does not use `.wsl_exec.sh` — that helper exists solely to make the WSL/Windows split workable for local development.
 
@@ -190,6 +191,12 @@ The HTML report is written to `htmlcov/index.html`. Coverage configuration:
 source = ["custom_components"]
 
 [tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplemented()",
+    "if __name__ == '__main__':",
+    "main()",
+]
 show_missing = true
 ```
 
@@ -203,33 +210,33 @@ Ruff and mypy run natively on Windows in a separate `.venv-win` virtual environm
 
 ```powershell
 $env:UV_PROJECT_ENVIRONMENT = ".venv-win"
-uv run ruff check custom_components/ tests/
-uv run ruff format --check custom_components/ tests/
+uv run ruff check custom_components/schellenberg_usb/ tests/
+uv run ruff format --check custom_components/schellenberg_usb/ tests/
 ```
 
 To auto-fix lint issues:
 
 ```powershell
 $env:UV_PROJECT_ENVIRONMENT = ".venv-win"
-uv run ruff check --fix custom_components/ tests/
+uv run ruff check --fix custom_components/schellenberg_usb/ tests/
 ```
 
-Ruff is configured with a max line length of 80 characters (`[tool.ruff.lint.pycodestyle]` in `pyproject.toml`).
+Ruff is configured with a max line length of 80 characters (`[tool.ruff.lint.pycodestyle]` in `pyproject.toml`). The lint rule selection is pinned explicitly to `E4`, `E7`, `E9`, and `F` (`[tool.ruff.lint]`), so a ruff upgrade does not silently widen the rule set.
 
 ### mypy (static types)
 
 ```powershell
 $env:UV_PROJECT_ENVIRONMENT = ".venv-win"
-uv run mypy custom_components/
+uv run mypy custom_components/schellenberg_usb/ tests/
 ```
 
-mypy targets Python 3.13 and uses `follow_imports = "silent"` and `ignore_missing_imports = true` to avoid noise from untyped third-party dependencies.
+mypy (`[tool.mypy]`) targets Python 3.13 and uses `follow_imports = "silent"` and `ignore_missing_imports = true` to avoid noise from untyped third-party dependencies.
 
 ### codespell
 
 ```powershell
 $env:UV_PROJECT_ENVIRONMENT = ".venv-win"
-uv run codespell
+uv run codespell custom_components/schellenberg_usb/ tests/ README.md CONTRIBUTING.md
 ```
 
 codespell is configured in `[tool.codespell]` in `pyproject.toml` with a domain-specific ignore list for HA APIs, abbreviations, and German tech terms.

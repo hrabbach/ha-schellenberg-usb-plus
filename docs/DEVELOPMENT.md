@@ -15,8 +15,9 @@ For system architecture see [ARCHITECTURE.md](ARCHITECTURE.md). For test detail 
 | Git | any | Version control |
 | WSL (Windows only) | 2 | Running the test suite (Linux required) |
 
-On Windows, WSL is required for tests because `homeassistant/runner.py` imports the
-Unix-only `fcntl` module. `uv run pytest` natively fails with
+On Windows, WSL is required for tests because the upstream Home Assistant package
+(`homeassistant/runner.py`, installed as a dependency, not part of this repository)
+imports the Unix-only `fcntl` module. `uv run pytest` natively fails with
 `ModuleNotFoundError: No module named 'fcntl'`. Do not try to fix this — it is a
 fundamental platform constraint.
 
@@ -194,11 +195,13 @@ canonical gate commands.
 
 ## Code Style
 
-- **Formatter:** ruff-format ~=0.15.20 (configured in `pyproject.toml`)
-- **Linter:** ruff ~=0.15.20 (rules configured in `pyproject.toml` `[tool.ruff.lint.pycodestyle]`)
+- **Formatter:** ruff-format ~=0.17.1 (the `lint` dependency group in `pyproject.toml`)
+- **Linter:** ruff ~=0.17.1 (rule selection pinned to `E4`, `E7`, `E9`, `F` in
+  `[tool.ruff.lint]` so a ruff upgrade never silently widens the rule set; widen it
+  deliberately by editing that list)
 - **Max line length:** 80 characters (`[tool.ruff.lint.pycodestyle]` in `pyproject.toml`)
-- **Type checker:** mypy ~=2.1.0 (configured in `pyproject.toml` `[tool.mypy]`)
-- **Spell checker:** codespell ~=2.4.1 (ignore-words list in `pyproject.toml` `[tool.codespell]`)
+- **Type checker:** mypy ~=2.4.0 (configured in `pyproject.toml` `[tool.mypy]`)
+- **Spell checker:** codespell ~=2.4.3 (ignore-words list in `pyproject.toml` `[tool.codespell]`)
 
 ### Key conventions
 
@@ -264,7 +267,7 @@ custom_components/schellenberg_usb/
 ├── services.yaml                     # `pair` service definition (activates stick
 │                                     # pairing mode)
 ├── strings.json                      # UI string keys
-└── translations/                     # Localized UI strings
+└── translations/                     # Localized UI strings (de, en, es, fr)
 
 tests/                                # pytest test suite (WSL only)
 ```
@@ -273,12 +276,14 @@ For a deeper explanation of how these modules interact see [ARCHITECTURE.md](ARC
 
 ## Branch Conventions
 
-Feature branches follow the pattern `feat/<short-description>` or `fix/<short-description>`.
-Phase branches use `gsd/phase-NN-<name>` (these are local workflow branches and are never
-pushed directly to origin).
+Feature branches follow the pattern `feat/<short-description>` or `fix/<short-description>`,
+created from `main`.
 
 Submit changes as pull requests against `main`. No convention is enforced by tooling —
 follow the pattern of existing branches visible in `git branch -a`.
+
+Pull requests must contain code only: do not include the `.planning/` or `.claude/`
+directories (they are local-only and blocked by the repository's pre-push hook).
 
 ## PR Process
 
@@ -289,7 +294,23 @@ follow the pattern of existing branches visible in `git branch -a`.
   implementation decisions.
 - Reviewers check correctness, HA integration conventions, and test coverage.
 - Merge with a merge commit (not squash) to preserve history.
+- Commits use conventional-commit prefixes (`feat:`, `fix:`, `docs:`, `chore:`,
+  `refactor:`, `test:`, `style:`).
+- User-facing changes add a one-line entry under `## [Unreleased]` in `CHANGELOG.md`
+  (see the Changelog section of [CONTRIBUTING.md](../CONTRIBUTING.md)); docs-only,
+  test, CI, and pure-refactor PRs get no entry.
+
+### Continuous integration
+
+`.github/workflows/build-test.yaml` ("Build & Test") runs on every push, pull request,
+nightly (`0 0 * * *`), and manual dispatch. Its jobs are Hassfest validation, HACS
+validation, lint and type check (`ruff check`, `ruff format --check`, `mypy`,
+`codespell`), and the test suite, all on `ubuntu-latest` with Python 3.14 and
+`uv sync --locked --all-extras --dev`. Dependabot (`.github/dependabot.yml`) opens
+monthly grouped PRs for Python dependencies and GitHub Actions.
 
 For releasing a merged PR as a HACS update, bump `manifest.json` version in the PR
 (semver: new feature → minor, fix-only → patch, breaking → major), then tag the merge
-commit `vX.Y.Z` and push the tag. The release workflow publishes automatically.
+commit `vX.Y.Z` and push the tag. `.github/workflows/release.yaml` zips
+`custom_components/schellenberg_usb` and publishes the GitHub release automatically on
+`vX.Y.Z` tags.

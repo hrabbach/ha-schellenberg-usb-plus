@@ -23,10 +23,14 @@ A Home Assistant custom integration that controls Schellenberg roller-shutter mo
 - **Time-based position tracking** — open/close times measured via a built-in calibration flow; drive-to-percentage works on any calibrated motor
 - **Auto-pairing** — put the stick into pairing mode from the HA UI; press the pairing button on the motor within 2 minutes
 - **Manual add** — add motors already paired by other remotes, or non-bidirectional motors, by entering a two-character hex enumerator: a user-chosen id that the stick uses to address that motor
+- **Delegation pairing from the UI** — a motor that is paired only to a physical remote can be enrolled for the stick entirely from Home Assistant: put the motor in learn mode with the remote, and the integration sends the pairing handshake and assigns a free enumerator automatically
 - **Bind a physical remote** — from a motor's **Configure** screen, bind a handheld remote by pressing its button twice; the remote then drives best-effort position tracking and a Home Assistant event entity for that motor. A multi-channel remote can bind each of its channels to a different motor independently — binding a second channel no longer collides with the first
 - **USB auto-discovery** — HA detects the stick on plug-in (USB VID `16C0` / PID `05E1`, manufacturer `van ooijen`) and pre-fills the serial port
 - **Stick status sensors** — connection status, firmware version, and operating mode
 - **LED switch** — toggle the USB stick LED on/off from HA
+- **Automatic recovery** — a heartbeat detects a stick that is connected but unresponsive and reconnects on its own; reconnection after unplugging backs off gradually (about 5 seconds up to 5 minutes)
+- **Repairs notification** — Home Assistant flags a timed motor that still uses the default travel time and guides you to calibrate it
+- **Ignore unknown signals** — a hub option (**Configure** on the hub) that silences log messages from devices not added to the integration, such as handheld remotes
 - Local control only — no cloud dependency (`iot_class: local_push`)
 - Up to 240 device slots per stick (enumerators `0x10`–`0xFF`; the integration allocates them automatically for auto-paired motors, starting at `0x10`)
 
@@ -68,8 +72,8 @@ Copy the `custom_components/schellenberg_usb/` folder from this repository into 
 1. Go to **Settings → Devices & Services → Add Integration** and search for **Schellenberg USB+**.
 2. If the stick is already plugged in, HA may auto-discover it and pre-fill the serial port — confirm it. Otherwise, enter the port path (e.g. `/dev/ttyUSB0`).
 3. Go to the newly created **Schellenberg USB+** hub and click **+ Add device**.
-4. Choose **Pair automatically** or **Add manually** (for already-paired or timed motors).
-5. Calibrate the motor from its device page to enable position tracking.
+4. Choose **Pair automatically** (bidirectional motors), **Add manually (already paired)** (a known enumerator), or **Pair a motor that's already paired with a remote** (silent motors paired only to a handheld remote).
+5. Calibrate the motor to enable accurate position tracking: open the motor's **Configure** screen and choose **Calibrate travel time**.
 
 Full step-by-step instructions, including calibration and troubleshooting, are in [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md).
 
@@ -102,7 +106,7 @@ Pairing is driven by the connected control device (remote or timer switch). Refe
 
 Motors in this category never send a pairing response — the in-app **Pair automatically** flow waits for the motor to transmit its device ID over RF, so a silent motor that was paired only to a physical remote will time out every time.
 
-To add a silent motor you first perform **wireless delegation pairing** outside the integration (teaching the motor to accept commands from the stick), then register it in HA via **Add manually**.
+To add a silent motor, teach it to accept commands from the stick using **wireless delegation pairing**. The easiest way is the in-app option **Pair a motor that's already paired with a remote** (see below). Alternatively, perform the delegation by hand outside the integration and then register the motor via **Add manually (already paired)**.
 
 #### Remote-driven position tracking (best-effort)
 
@@ -114,9 +118,21 @@ Bind a remote from the motor's **Configure** screen (**Bind a remote**): press a
 
 The two-character hex enumerator (e.g. `1A`) is a user-chosen id that the stick assigns to a motor at pairing time. It is the stick's address for that motor — not an address the motor already has. When you add a motor via **Pair automatically**, the integration allocates the lowest free enumerator starting at `10` automatically. When you add a motor via **Add manually** (after delegation pairing below), you pick a unique value yourself and enter that same value in the HA form.
 
-#### Wireless delegation pairing using a 5-channel remote (Funk-Handsender 5 Kanal, Model 20016)
+#### Delegation pairing from the HA UI (recommended)
 
-This procedure teaches a motor that is already paired to a physical Schellenberg 5-channel remote to also accept commands from the USB stick. Perform these steps **before** adding the motor in Home Assistant, with HA (and the integration) either stopped or not yet owning the serial port — the raw commands below are sent directly to the port.
+For a motor that already responds to a physical remote (for example the 5-channel Funk-Handsender, Model 20016):
+
+1. On the hub, click **+ Add device** and choose **Pair a motor that's already paired with a remote**.
+2. On the remote, select the channel for the motor, press the **P** (program) button, then press **Stop**. The motor jogs briefly to confirm it is in learn mode.
+3. Within 30 seconds, press **Next**, then **Transmit**. The stick LED blinks while the integration sends the pairing handshake; the motor jogs once more to acknowledge.
+4. Name the motor and set its current position. A free enumerator is assigned automatically.
+5. Test by pressing **Open** in Home Assistant. A silent motor cannot confirm the pairing, so if it does not move, repeat the flow.
+
+If the stick is busy or disconnects during the handshake you get a "Pairing command failed" error and can retry without restarting. If all slots are in use you get a "Device limit reached" error.
+
+#### Manual wireless delegation pairing using a 5-channel remote (Funk-Handsender 5 Kanal, Model 20016)
+
+This is the manual equivalent of the in-app flow above, for users who prefer to drive the stick directly. It teaches a motor that is already paired to a physical Schellenberg 5-channel remote to also accept commands from the USB stick. Perform these steps **before** adding the motor in Home Assistant, with HA (and the integration) either stopped or not yet owning the serial port — the raw commands below are sent directly to the port.
 
 **Prerequisites:** The HA host must have write access to the stick's serial device (e.g. `/dev/ttyACM0` or `/dev/ttyUSB0`). Identify the correct path with `ls /dev/tty*` after plugging in the stick.
 
@@ -163,7 +179,7 @@ echo 'ssXX9020000' > /dev/ttyACM0
 echo 'ssXX9000000' > /dev/ttyACM0
 ```
 
-**Step 6 — Add the motor in Home Assistant.** Go to **Settings → Devices & Services → Schellenberg USB → Add device → Add manually (already paired)**. Enter `XX` (the same hex value used above) as the device enumerator, select **timed (non-bidirectional)** motor type, and complete the form. The integration will now send all commands to that enumerator.
+**Step 6 — Add the motor in Home Assistant.** Go to **Settings → Devices & Services → Schellenberg USB+**, click **+ Add device**, and choose **Add manually (already paired)**. Enter `XX` (the same hex value used above) as the transmit address, untick **Bidirectional motor**, optionally set a name, and complete the form (you are then asked for the current position). The integration will now send all commands to that enumerator.
 
 ### General tips
 
@@ -183,7 +199,7 @@ echo 'ssXX9000000' > /dev/ttyACM0
 | **Bidirectional** | Motor reports `started moving` and `stopped` events back to the stick | Event-driven — the integration starts and stops the timer automatically |
 | **Timed (non-bidirectional)** | Motor gives no movement feedback | Time-based — the integration drives the motor and measures elapsed time between your button presses during calibration |
 
-You select the motor type once when adding the device. Existing motors added before this distinction was introduced are treated as bidirectional.
+With **Pair automatically** the motor is bidirectional; **Pair a motor that's already paired with a remote** creates a timed motor; with **Add manually (already paired)** you choose via the **Bidirectional motor** checkbox when adding the device. Existing motors added before this distinction was introduced are treated as bidirectional.
 
 ---
 
@@ -217,6 +233,7 @@ For each paired motor (subentry):
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Local dev setup, build commands, code style |
 | [docs/TESTING.md](docs/TESTING.md) | Running tests, coverage, CI integration |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Quality gate commands and contribution guidelines |
+| [CHANGELOG.md](CHANGELOG.md) | Release history |
 
 ---
 
