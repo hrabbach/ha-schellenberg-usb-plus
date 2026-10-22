@@ -714,6 +714,83 @@ async def test_connection_lost_unknown_age_sentinel(
 
 
 @pytest.mark.asyncio
+async def test_connection_lost_after_disconnect_is_local(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """disconnect() close is reported as initiator=local cause=disconnect."""
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    mock_transport = MagicMock()
+    api._transport = mock_transport
+    api._is_connected = True
+    api._last_traffic_time = hass.loop.time() - 12.0
+
+    await api.disconnect()
+
+    mock_transport.close.assert_called_once()
+    assert api._local_close_reason == "disconnect"
+
+    protocol = SchellenbergProtocol(api._handle_message, api)
+    with caplog.at_level(logging.WARNING, logger=_API_LOGGER):
+        protocol.connection_lost(None)
+
+    records = _loss_records(caplog)
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert "initiator=local" in message
+    assert "cause=disconnect" in message
+    assert 11.9 <= _parsed_age(message) <= 13.0
+    # disconnect() latched _closed, so no reconnect timer is armed.
+    assert api._reconnect_handle is None
+
+
+@pytest.mark.asyncio
+async def test_connect_verify_failed_is_local_and_clears_stale_cause(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Stale cause is cleared on a new transport; verify-failed close is local."""
+    api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
+    # Leftover from an earlier connection.
+    api._local_close_reason = "heartbeat_frozen"
+    api._last_traffic_time = hass.loop.time() - 5.0
+
+    protocol = SchellenbergProtocol(api._handle_message, api)
+    mock_transport = MagicMock()
+    mock_transport.is_closing = MagicMock(return_value=False)
+    seen: list[str | None] = []
+
+    async def fake_verify(*_args: object, **_kwargs: object) -> bool:
+        seen.append(api._local_close_reason)
+        return False
+
+    with (
+        patch(
+            "serial_asyncio_fast.create_serial_connection",
+            new_callable=AsyncMock,
+        ) as mock_create,
+        patch.object(api, "verify_device", new=fake_verify),
+    ):
+        mock_create.return_value = (mock_transport, protocol)
+        await api.connect()
+
+    assert seen == [None]
+    mock_transport.close.assert_called_once()
+    assert api._local_close_reason == "verify_failed"
+    assert api._transport is None
+
+    schedule = MagicMock()
+    api._schedule_reconnect = schedule  # type: ignore[method-assign]
+    with caplog.at_level(logging.WARNING, logger=_API_LOGGER):
+        protocol.connection_lost(None)
+
+    records = _loss_records(caplog)
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert "initiator=local" in message
+    assert "cause=verify_failed" in message
+    schedule.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_api_pair_device_already_pairing(hass: HomeAssistant) -> None:
     """Test pairing when already in progress."""
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")

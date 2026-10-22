@@ -267,6 +267,13 @@ class SchellenbergUsbApi:
                 self.port,
                 baudrate=112500,
             )
+            # Issue #50 diagnostics: a NEW transport now exists, so any later
+            # connection_lost belongs to it and must not inherit a stale local
+            # cause. Safe to clear here: the previous transport's
+            # connection_lost has already run (asyncio delivers it on the next
+            # loop tick after close(); every local close is followed by the
+            # _closed teardown latch or a reconnect delay of >= 2.5 s).
+            self._local_close_reason = None
             _LOGGER.info("Successfully connected to Schellenberg USB stick")
 
             # Verify this is a Schellenberg device
@@ -275,6 +282,8 @@ class SchellenbergUsbApi:
                     "Device verification failed - not a Schellenberg USB stick"
                 )
                 if self._transport:
+                    # Issue #50 diagnostics: read by connection_lost.
+                    self._local_close_reason = "verify_failed"
                     self._transport.close()
                 self._transport = None
                 self._is_connected = False
@@ -1637,6 +1646,8 @@ class SchellenbergUsbApi:
             self._stop_pairing_task = None
 
         if self._transport:
+            # Issue #50 diagnostics: read by connection_lost.
+            self._local_close_reason = "disconnect"
             self._transport.close()
             self._transport = None
             _LOGGER.info("Disconnected from Schellenberg USB stick")
