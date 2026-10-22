@@ -549,6 +549,22 @@ backoff with equal jitter (base 5 s, cap 300 s), stores one `asyncio.TimerHandle
 in `_reconnect_handle`, and no-ops if a reconnect is already pending or the API
 has been closed (`_closed = True`).
 
+### Connection-loss diagnostics
+
+`SchellenbergProtocol.connection_lost` logs a `WARNING` that appends
+`api._connection_loss_context()`, formatted as
+`initiator=<local|transport> cause=<reason|unknown> last_traffic_age_s=<seconds|unknown>`.
+Every close the integration itself initiates records its cause in
+`api._local_close_reason` immediately before calling `transport.close()`:
+`verify_failed` (device verification failed in `connect()`), `heartbeat_frozen`
+(heartbeat miss threshold reached), or `disconnect` (explicit teardown). If the
+field is `None` when `connection_lost` fires, the close was transport-initiated
+(unplug, I/O error, driver drop) and is reported as `initiator=transport
+cause=unknown`. `connect()` clears the field once a new transport exists so a
+later loss never inherits a stale cause. The age is measured from
+`_last_traffic_time` (stamped by inbound frames and tracked outbound sends). This
+is diagnostic-only and has no effect on reconnect behaviour.
+
 ### Ignore unknown signals
 
 The `CONF_IGNORE_UNKNOWN` hub option demotes log lines for unknown device IDs from

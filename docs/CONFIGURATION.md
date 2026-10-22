@@ -87,8 +87,8 @@ The reconfigure menu is adaptive based on current binding state:
 
 | State | Menu options |
 |-------|--------------|
-| No remote bound | `Calibrate`, `Bind a remote` |
-| Remote bound | `Calibrate`, `Change remote`, `Remove remote` |
+| No remote bound | `Calibrate travel time`, `Bind a remote` |
+| Remote bound | `Calibrate travel time`, `Change remote`, `Remove remote` |
 
 ### Learn-by-Press Flow
 
@@ -191,6 +191,13 @@ These values are fixed in the source and are not user-configurable:
 | `LEARN_REMOTE_TIMEOUT` | `30.0` seconds | Learn-window default timeout (not UI-exposed) |
 | `LEARN_REMOTE_CAPTURE_TIMEOUT` | `15.0` seconds | Per-press capture window in the remote learn-by-press flow |
 | `REMOTE_DEDUP_WINDOW` | `1.0` seconds | Quiet period for collapsing repeated RF frames from one button press |
+| `RETRY_QUEUE_CAP` | `16` commands | Maximum backlog of commands queued for retry after a "stick busy" (`tE`) response; further commands are dropped with a warning |
+| `RETRY_DELAY` | `0.1` seconds | Delay before a queued command is retried |
+| `HEARTBEAT_INTERVAL` | `120` seconds | Interval of the frozen-stick heartbeat check |
+| `HEARTBEAT_TRAFFIC_WINDOW` | `120` seconds | Heartbeat is skipped if the stick sent traffic within this window |
+| `HEARTBEAT_MISS_THRESHOLD` | `2` | Consecutive missed heartbeats before the connection is treated as lost |
+| `RECONNECT_BACKOFF_BASE` | `5` seconds | Base delay for reconnect attempts (truncated exponential backoff with jitter) |
+| `RECONNECT_BACKOFF_CAP` | `300` seconds | Maximum reconnect delay (about 5 minutes) |
 
 ---
 
@@ -201,7 +208,7 @@ Source: `manifest.json`
 | Field | Value |
 |-------|-------|
 | Domain | `schellenberg_usb` |
-| Version | `1.3.1` |
+| Version | `1.3.2` |
 | Integration type | `hub` |
 | IoT class | `local_push` |
 | Requirement | `pyserial-asyncio-fast==0.16` |
