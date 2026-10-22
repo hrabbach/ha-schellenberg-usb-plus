@@ -124,7 +124,7 @@ async def test_timed_bound_motor_creates_event_entity(
     mock_add_entities: MagicMock = MagicMock()
 
     # Execute
-    await async_setup_entry(hass, entry, mock_add_entities)  # type: ignore[arg-type]  # type: ignore[arg-type]
+    await async_setup_entry(hass, entry, mock_add_entities)  # type: ignore[arg-type]
 
     # Assert: exactly one call to async_add_entities with one entity
     mock_add_entities.assert_called_once()
