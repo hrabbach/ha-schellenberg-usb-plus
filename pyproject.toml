@@ -30,8 +30,8 @@ test = [
 
 lint = [
     "codespell~=2.4.3",
-    "mypy~=2.3.0",
-    "ruff~=0.16.0",
+    "mypy~=2.4.0",
+    "ruff~=0.17.1",
     "types-PyYAML~=6.0.12.20250915",
 ]
 
