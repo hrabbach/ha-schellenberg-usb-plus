@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -622,9 +623,26 @@ def _parsed_age(message: str) -> float:
     return float(match.group(1))
 
 
+_PINNED_LOOP_TIME = 100_000.0
+
+
+@pytest.fixture
+def pinned_loop_clock(hass: HomeAssistant) -> Iterator[None]:
+    """Pin hass.loop.time() so clock-relative offsets stay positive.
+
+    hass.loop.time() is monotonic uptime; on a freshly booted machine a
+    "now minus N seconds" stamp can go negative, which the age helper reads
+    as the 'no traffic yet' sentinel (issue #50 test flake).
+    """
+    with patch.object(hass.loop, "time", return_value=_PINNED_LOOP_TIME):
+        yield
+
+
 @pytest.mark.asyncio
 async def test_connection_lost_after_heartbeat_close_is_local(
-    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+    pinned_loop_clock: None,
 ) -> None:
     """Frozen-stick heartbeat close is reported as initiator=local (issue #50)."""
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
@@ -663,7 +681,9 @@ async def test_connection_lost_after_heartbeat_close_is_local(
 
 @pytest.mark.asyncio
 async def test_connection_lost_unexpected_is_transport(
-    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+    pinned_loop_clock: None,
 ) -> None:
     """A close with no local cause recorded is initiator=transport (issue #50)."""
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
@@ -715,7 +735,9 @@ async def test_connection_lost_unknown_age_sentinel(
 
 @pytest.mark.asyncio
 async def test_connection_lost_after_disconnect_is_local(
-    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+    pinned_loop_clock: None,
 ) -> None:
     """disconnect() close is reported as initiator=local cause=disconnect."""
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
@@ -745,7 +767,9 @@ async def test_connection_lost_after_disconnect_is_local(
 
 @pytest.mark.asyncio
 async def test_connect_verify_failed_is_local_and_clears_stale_cause(
-    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+    pinned_loop_clock: None,
 ) -> None:
     """Stale cause is cleared on a new transport; verify-failed close is local."""
     api = SchellenbergUsbApi(hass, "/dev/ttyUSB0")
