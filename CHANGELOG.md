@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   ### Removed       — removed features
 -->
 
+## [1.3.3] - 2026-10-24
+
+### Fixed
+
+- Home Assistant no longer logs, at every start, the deprecation warning that this integration calls `device_registry.async_update_device` with `add_config_entry_id` / `remove_config_subentry_id`, which "will stop working in Home Assistant 2027.8.0". On Home Assistant 2026.8 and newer, the USB stick's hub device is now moved with the new device-registry API, and only when it actually needs moving. Older Home Assistant versions behave exactly as before. No user action is needed, and your devices, entities, and calibration are untouched.
+
 ## [1.3.2] - 2026-10-22
 
 ### Changed
@@ -108,7 +114,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Stick status sensors (connection status, firmware version, mode)
 - HACS-compatible via zip_release delivery
 
-[unreleased]: https://github.com/hrabbach/ha-schellenberg-usb-plus/compare/v1.3.2...HEAD
+[unreleased]: https://github.com/hrabbach/ha-schellenberg-usb-plus/compare/v1.3.3...HEAD
+[1.3.3]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.3.3
 [1.3.2]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.3.2
 [1.3.1]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.3.1
 [1.3.0]: https://github.com/hrabbach/ha-schellenberg-usb-plus/releases/tag/v1.3.0
