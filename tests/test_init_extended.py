@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -483,3 +484,143 @@ async def test_setup_entry_is_idempotent_across_restarts(
     assert hub_device.config_entries_subentries[entry.entry_id] == {
         hub_subentries[0].subentry_id
     }
+
+
+_LEGACY_UPDATE_KWARGS = (
+    "add_config_entry_id",
+    "add_config_subentry_id",
+    "remove_config_entry_id",
+    "remove_config_subentry_id",
+)
+
+
+class _SingleOwnerDeviceRegistry:
+    """Test double for the Home Assistant 2026.8+ single-owner device registry.
+
+    Models the contract verified against home-assistant/core tags 2026.8.0
+    and 2026.10.0: a device belongs to exactly one config entry and at most
+    one subentry (``config_entry_id`` / ``config_subentry_id``), it is moved
+    with ``new_config_entry_id`` / ``new_config_subentry_id``, and the four
+    legacy ``add_*`` / ``remove_*`` kwargs are deprecated.
+
+    The seeded device deliberately has NO ``config_entries`` /
+    ``config_entries_subentries`` attributes (deprecated properties on
+    2026.10+), so any read of them raises ``AttributeError``.
+    """
+
+    def __init__(self, hass: HomeAssistant, device: SimpleNamespace) -> None:
+        """Store the hass instance and the single seeded device."""
+        self._hass = hass
+        self._device = device
+        self.update_calls: list[dict[str, Any]] = []
+
+    def async_get_device(
+        self,
+        identifiers: set[tuple[str, str]] | None = None,
+        connections: set[tuple[str, str]] | None = None,
+    ) -> SimpleNamespace | None:
+        """Return the seeded device when the identifiers match."""
+        if identifiers and identifiers & self._device.identifiers:
+            return self._device
+        return None
+
+    def async_get_or_create(self, **kwargs: Any) -> SimpleNamespace:
+        """Fail: the hub device already exists in these tests."""
+        raise AssertionError(f"unexpected async_get_or_create: {kwargs}")
+
+    def async_update_device(self, device_id: str, **kwargs: Any) -> SimpleNamespace:
+        """Apply new_config_* kwargs with core's single-owner semantics."""
+        assert device_id == self._device.id
+        self.update_calls.append(dict(kwargs))
+        used_legacy = [k for k in _LEGACY_UPDATE_KWARGS if k in kwargs]
+        assert not used_legacy, f"deprecated legacy kwargs used: {used_legacy}"
+
+        entry_id = self._device.config_entry_id
+        if "new_config_entry_id" in kwargs:
+            entry_id = kwargs["new_config_entry_id"]
+            assert self._hass.config_entries.async_get_entry(entry_id) is not None
+            self._device.config_entry_id = entry_id
+            if "new_config_subentry_id" not in kwargs:
+                # Core resets the subentry when only the entry is given.
+                self._device.config_subentry_id = None
+        if "new_config_subentry_id" in kwargs:
+            subentry_id = kwargs["new_config_subentry_id"]
+            if subentry_id is not None:
+                resolved = self._hass.config_entries.async_get_entry(entry_id)
+                assert resolved is not None
+                # Mirrors core's "Config entry X has no subentry Y" error.
+                assert subentry_id in resolved.subentries
+            self._device.config_subentry_id = subentry_id
+        return self._device
+
+
+def _make_single_owner_entry(hass: HomeAssistant, entry_id: str) -> ConfigEntry:
+    """Create and register a hub config entry with no subentries."""
+    entry = ConfigEntry(
+        version=1,
+        domain=DOMAIN,
+        title="Schellenberg USB",
+        data={CONF_SERIAL_PORT: "/dev/ttyUSB0"},
+        options={},
+        entry_id=entry_id,
+        state=ConfigEntryState.NOT_LOADED,
+        minor_version=1,
+        source="test",
+        unique_id=None,
+        discovery_keys=MappingProxyType({}),
+        subentries_data=None,
+    )
+    hass.config_entries._entries[entry.entry_id] = entry
+    return entry
+
+
+def _make_single_owner_registry(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> _SingleOwnerDeviceRegistry:
+    """Build a fake registry seeded with a hub device in the main entry."""
+    device = SimpleNamespace(
+        id="hub_device_id",
+        identifiers={(DOMAIN, entry.entry_id)},
+        config_entry_id=entry.entry_id,
+        config_subentry_id=None,
+    )
+    return _SingleOwnerDeviceRegistry(hass, device)
+
+
+@pytest.mark.asyncio
+async def test_single_owner_registry_moves_hub_device_with_new_kwargs(
+    hass: HomeAssistant,
+) -> None:
+    """Test HA 2026.8+: the hub device is moved with new_config_* kwargs only.
+
+    The legacy add_*/remove_* kwargs log a deprecation warning since HA
+    2026.9 and stop working in 2027.8.0, so they must never be passed.
+    """
+    from custom_components.schellenberg_usb import async_setup_entry
+
+    entry = _make_single_owner_entry(hass, "test_entry_single_owner")
+    fake_registry = _make_single_owner_registry(hass, entry)
+
+    with (
+        patch.object(SchellenbergUsbApi, "connect", new_callable=AsyncMock),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", new_callable=AsyncMock
+        ),
+        patch.object(dr, "async_get", return_value=fake_registry),
+    ):
+        assert await async_setup_entry(hass, entry) is True
+
+    hub_subentry = next(
+        s for s in entry.subentries.values() if s.subentry_type == SUBENTRY_TYPE_HUB
+    )
+
+    assert fake_registry.update_calls == [
+        {
+            "new_config_entry_id": entry.entry_id,
+            "new_config_subentry_id": hub_subentry.subentry_id,
+        }
+    ]
+    device = fake_registry.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    assert device is not None
+    assert device.config_entry_id == entry.entry_id
+    assert device.config_subentry_id == hub_subentry.subentry_id
