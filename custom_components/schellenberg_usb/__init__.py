@@ -49,7 +49,21 @@ def _ensure_hub_device_in_hub_subentry(
     model is detected from the device entry itself, because the attribute and
     the ``new_config_*`` update kwargs landed together in 2026.8.0.
     """
-    if getattr(hub_device, "config_subentry_id", _MISSING) is not _MISSING:
+    current_subentry_id = getattr(hub_device, "config_subentry_id", _MISSING)
+    if current_subentry_id is not _MISSING:
+        # Only the non-deprecated single-owner fields are read here:
+        # config_entries / config_entries_subentries are deprecated
+        # properties on HA 2026.10+.
+        if (
+            getattr(hub_device, "config_entry_id", None) == entry_id
+            and current_subentry_id == hub_subentry_id
+        ):
+            _LOGGER.debug(
+                "Hub device %s already in hub subentry %s, no update needed",
+                hub_device.id,
+                hub_subentry_id,
+            )
+            return
         # HA 2026.8+: move with ONE call using the new single-owner kwargs.
         # The kwargs go through a dict because the pinned HA stubs (< 2026.8)
         # do not declare them and a type-ignore would go stale once the dev
@@ -64,6 +78,15 @@ def _ensure_hub_device_in_hub_subentry(
         return
 
     # HA before 2026.8: the legacy multi-association API.
+    if hub_device.config_entries_subentries.get(entry_id) == {hub_subentry_id}:
+        # Both legacy calls would be no-ops (add a present subentry, remove an
+        # absent None), so skip them.
+        _LOGGER.debug(
+            "Hub device %s already in hub subentry %s, no update needed",
+            hub_device.id,
+            hub_subentry_id,
+        )
+        return
     device_registry.async_update_device(
         hub_device.id,
         add_config_entry_id=entry_id,
@@ -79,8 +102,8 @@ def _ensure_hub_device_in_hub_subentry(
     # association set, so merging them would subtract None from the
     # pre-update {None}, end up with an empty set, drop the config-entry
     # key, and delete the hub device outright. On installs that never had
-    # a None association this call is a deliberate no-op — it runs on
-    # every setup.
+    # a None association this call is a deliberate no-op. The pair now runs
+    # only when the device is not already homed in the hub subentry.
     device_registry.async_update_device(
         hub_device.id,
         remove_config_entry_id=entry_id,
