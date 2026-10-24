@@ -624,3 +624,87 @@ async def test_single_owner_registry_moves_hub_device_with_new_kwargs(
     assert device is not None
     assert device.config_entry_id == entry.entry_id
     assert device.config_subentry_id == hub_subentry.subentry_id
+
+
+@pytest.mark.asyncio
+async def test_single_owner_registry_already_homed_hub_device_not_updated(
+    hass: HomeAssistant,
+) -> None:
+    """Test HA 2026.8+: a restart with an already-homed hub device is a no-op."""
+    from custom_components.schellenberg_usb import async_setup_entry
+
+    entry = _make_single_owner_entry(hass, "test_entry_single_owner_homed")
+    fake_registry = _make_single_owner_registry(hass, entry)
+
+    with (
+        patch.object(SchellenbergUsbApi, "connect", new_callable=AsyncMock),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", new_callable=AsyncMock
+        ),
+        patch.object(dr, "async_get", return_value=fake_registry),
+    ):
+        # First setup performs the one-time move.
+        assert await async_setup_entry(hass, entry) is True
+        assert len(fake_registry.update_calls) == 1
+
+        # Second setup simulates a Home Assistant restart.
+        fake_registry.update_calls.clear()
+        assert await async_setup_entry(hass, entry) is True
+
+    assert fake_registry.update_calls == []
+
+    hub_subentry = next(
+        s for s in entry.subentries.values() if s.subentry_type == SUBENTRY_TYPE_HUB
+    )
+    device = fake_registry.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
+    assert device is not None
+    assert device.config_entry_id == entry.entry_id
+    assert device.config_subentry_id == hub_subentry.subentry_id
+
+
+@pytest.mark.asyncio
+async def test_legacy_registry_already_homed_hub_device_not_updated(
+    hass: HomeAssistant,
+) -> None:
+    """Test pre-2026.8 registry: a restart makes no async_update_device call."""
+    from custom_components.schellenberg_usb import async_setup_entry
+
+    entry = _make_single_owner_entry(hass, "test_entry_legacy_homed")
+
+    # Seed the pre-subentry hub device (None association) on the real registry.
+    device_registry = dr.async_get(hass)
+    device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, entry.entry_id)},
+        name="Schellenberg USB Stick",
+    )
+
+    with (
+        patch.object(SchellenbergUsbApi, "connect", new_callable=AsyncMock),
+        patch.object(
+            hass.config_entries, "async_forward_entry_setups", new_callable=AsyncMock
+        ),
+    ):
+        # First setup migrates {None} -> {hub} via the two legacy calls.
+        assert await async_setup_entry(hass, entry) is True
+
+        # Second setup simulates a restart; the spy must stay untouched.
+        with patch.object(
+            device_registry,
+            "async_update_device",
+            wraps=device_registry.async_update_device,
+        ) as update_spy:
+            assert await async_setup_entry(hass, entry) is True
+
+    update_spy.assert_not_called()
+
+    hub_subentry = next(
+        s for s in entry.subentries.values() if s.subentry_type == SUBENTRY_TYPE_HUB
+    )
+    hub_device = device_registry.async_get_device(
+        identifiers={(DOMAIN, entry.entry_id)}
+    )
+    assert hub_device is not None
+    assert hub_device.config_entries_subentries[entry.entry_id] == {
+        hub_subentry.subentry_id
+    }
