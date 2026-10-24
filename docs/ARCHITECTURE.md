@@ -496,23 +496,39 @@ change, `_on_entry_updated` in `__init__.py` detects the diff via
 Home Assistant now enforces that a device may belong to **at most one config
 subentry** (`home-assistant/core#175785`). Installs that predate the hub
 subentry left the hub device associated with subentry `None`. On every
-`async_setup_entry`, `__init__.py` reconciles this with **two sequential**
-`device_registry.async_update_device()` calls on the existing hub device:
+`async_setup_entry`, `__init__.py` calls `_ensure_hub_device_in_hub_subentry`
+for the existing hub device. It detects the registry model from the device entry
+itself: `DeviceEntry.config_subentry_id` exists only on Home Assistant 2026.8+
+(single-owner model), and the `new_config_*` update kwargs landed together with
+it. In both models the helper makes no registry call when the device is already
+in the hub subentry (every normal restart).
+
+**HA 2026.8+ (single owner):** one
+`async_update_device(hub_device.id, new_config_entry_id=entry.entry_id,
+new_config_subentry_id=hub_subentry.subentry_id)` call, made only when the
+device is not already in the hub subentry. Core's v3 registry migration already
+collapses a legacy `{None, hub}` association to the hub subentry, so the move
+only matters for a device still in the main entry. Only `config_entry_id` and
+`config_subentry_id` are read; `config_entries` / `config_entries_subentries`
+are deprecated properties on 2026.10+.
+
+**Before HA 2026.8 (legacy multi-association):** **two sequential**
+`device_registry.async_update_device()` calls, made only when the association is
+not already exactly `{hub}`:
 
 1. `add_config_entry_id=entry.entry_id, add_config_subentry_id=hub_subentry.subentry_id`
    — associates the hub device with the hub subentry.
 2. `remove_config_entry_id=entry.entry_id, remove_config_subentry_id=None`
    — drops the legacy `None` (no-subentry) association.
 
-These calls **must not be merged into one**. HA's `_async_update_device` computes
+On this path the calls **must not be merged into one**. HA's `_async_update_device` computes
 both the add-result and the remove-result from the device's *pre-update*
 association set. A single combined call with both add and remove would compute
 `{None} - {None} = {}` against the pre-update set, drop the config-entry key
 entirely, and delete the hub device outright. Doing it as two sequential calls
 means the second call's pre-update set already reflects the first call's result,
 so the `None` removal targets the correct state. On installs that never had a
-`None` association, the second call is a deliberate no-op — it still runs on
-every setup.
+`None` association, the second call is a deliberate no-op.
 
 ---
 
@@ -590,19 +606,27 @@ deliberate exception is `_registered_devices`, which stays keyed on bare
 be formed; do not "fix" that inconsistency without re-reading the comment in
 `api.py:SchellenbergUsbApi.__init__`.
 
-### Hub device subentry migration must be two calls, never one
+### Hub device subentry migration: two calls before HA 2026.8, new kwargs after
 
-`__init__.py:async_setup_entry` reconciles the hub device's subentry association
-with `device_registry.async_update_device()`. Since HA allows a device to belong
-to at most one config subentry (`home-assistant/core#175785`), migrating a
-pre-hub-subentry install requires adding the new subentry association and
-removing the legacy `None` association — but these **must be two sequential
-calls**, not one merged call. HA derives both the add- and remove-result from
-the device's *pre-update* association set; a single call with both
-`add_config_subentry_id=hub_subentry.subentry_id` and
-`remove_config_subentry_id=None` would compute `{None} - {None} = {}`, drop the
-config-entry key, and delete the hub device outright. See Entry Hierarchy and
-Device Registry above for the full sequence.
+`__init__.py:_ensure_hub_device_in_hub_subentry` reconciles the hub device's
+subentry association with `device_registry.async_update_device()`, and the
+kwargs it may use depend on the HA version:
+
+- **Before HA 2026.8 (legacy path):** since HA allows a device to belong to at
+  most one config subentry (`home-assistant/core#175785`), migrating a
+  pre-hub-subentry install requires adding the new subentry association and
+  removing the legacy `None` association — but these **must be two sequential
+  calls**, not one merged call. HA derives both the add- and remove-result from
+  the device's *pre-update* association set; a single call with both
+  `add_config_subentry_id=hub_subentry.subentry_id` and
+  `remove_config_subentry_id=None` would compute `{None} - {None} = {}`, drop the
+  config-entry key, and delete the hub device outright.
+- **Never pass `new_config_*` on HA before 2026.8** (`TypeError`, setup crash),
+  and **never pass the legacy `add_*` / `remove_*` kwargs on HA 2026.8+**
+  (deprecation warning since 2026.9, stops working in 2027.8.0). The helper picks
+  the path from the presence of `DeviceEntry.config_subentry_id`.
+
+See Hub device migration (single-subentry constraint) above for the full sequence.
 
 ### Platform load order is load-bearing
 
