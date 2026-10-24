@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from types import MappingProxyType
+from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigSubentry
@@ -30,6 +31,61 @@ CONFIG_SCHEMA = vol.Schema(
 
 # Store setup callbacks for each entry so we can track subentries
 _SETUP_CALLBACKS: dict[str, dict] = {}
+
+# Marker for "this DeviceEntry has no config_subentry_id attribute" (HA < 2026.8)
+_MISSING = object()
+
+
+def _ensure_hub_device_in_hub_subentry(
+    device_registry: dr.DeviceRegistry,
+    hub_device: dr.DeviceEntry,
+    entry_id: str,
+    hub_subentry_id: str,
+) -> None:
+    """Make sure the existing hub device lives in the hub subentry.
+
+    Home Assistant 2026.8 replaced the multi-association device model with a
+    single owner (``config_entry_id`` / ``config_subentry_id``). The registry
+    model is detected from the device entry itself, because the attribute and
+    the ``new_config_*`` update kwargs landed together in 2026.8.0.
+    """
+    if getattr(hub_device, "config_subentry_id", _MISSING) is not _MISSING:
+        # HA 2026.8+: move with ONE call using the new single-owner kwargs.
+        # The kwargs go through a dict because the pinned HA stubs (< 2026.8)
+        # do not declare them and a type-ignore would go stale once the dev
+        # pin moves past 2026.8. Core's v3 registry migration already
+        # collapsed any legacy {None, hub} association to the hub subentry,
+        # so this only matters for a device still in the main entry.
+        move_kwargs: dict[str, Any] = {
+            "new_config_entry_id": entry_id,
+            "new_config_subentry_id": hub_subentry_id,
+        }
+        device_registry.async_update_device(hub_device.id, **move_kwargs)
+        return
+
+    # HA before 2026.8: the legacy multi-association API.
+    device_registry.async_update_device(
+        hub_device.id,
+        add_config_entry_id=entry_id,
+        add_config_subentry_id=hub_subentry_id,
+    )
+    # Drop the legacy "no subentry" (None) association left behind by
+    # versions that predate the hub subentry. Home Assistant now allows a
+    # device to belong to at most one config subentry (issue #40,
+    # home-assistant/core#175785), so leaving both would be invalid.
+    #
+    # This MUST be a second call: HA's _async_update_device derives both
+    # the add-result and the remove-result from the device's PRE-UPDATE
+    # association set, so merging them would subtract None from the
+    # pre-update {None}, end up with an empty set, drop the config-entry
+    # key, and delete the hub device outright. On installs that never had
+    # a None association this call is a deliberate no-op — it runs on
+    # every setup.
+    device_registry.async_update_device(
+        hub_device.id,
+        remove_config_entry_id=entry_id,
+        remove_config_subentry_id=None,
+    )
 
 
 async def async_setup_entry(
@@ -104,27 +160,8 @@ async def async_setup_entry(
             entry.entry_id,
             hub_subentry.subentry_id,
         )
-        device_registry.async_update_device(
-            hub_device.id,
-            add_config_entry_id=entry.entry_id,
-            add_config_subentry_id=hub_subentry.subentry_id,
-        )
-        # Drop the legacy "no subentry" (None) association left behind by
-        # versions that predate the hub subentry. Home Assistant now allows a
-        # device to belong to at most one config subentry (issue #40,
-        # home-assistant/core#175785), so leaving both would be invalid.
-        #
-        # This MUST be a second call: HA's _async_update_device derives both
-        # the add-result and the remove-result from the device's PRE-UPDATE
-        # association set, so merging them would subtract None from the
-        # pre-update {None}, end up with an empty set, drop the config-entry
-        # key, and delete the hub device outright. On installs that never had
-        # a None association this call is a deliberate no-op — it runs on
-        # every setup.
-        device_registry.async_update_device(
-            hub_device.id,
-            remove_config_entry_id=entry.entry_id,
-            remove_config_subentry_id=None,
+        _ensure_hub_device_in_hub_subentry(
+            device_registry, hub_device, entry.entry_id, hub_subentry.subentry_id
         )
 
     # Forward setup to the hub's platforms (cover, sensor, switch)
